@@ -8,7 +8,6 @@ No browser needed.
 from __future__ import annotations
 
 import re
-import json
 from datetime import datetime
 from typing import Optional
 
@@ -21,8 +20,8 @@ BASE_URL = "https://www.zag.com.au"
 # The /stockapi/results AJAX endpoint ignores make/body_type params;
 # scraping the HTML pages directly is the only way to get pre-filtered results.
 CONDITION_PAGES = {
-    "Demo": "https://www.zag.com.au/stock?condition=Demo&make%5BAudi%5D=A5&body_type=Wagon",
-    "Used": "https://www.zag.com.au/stock?condition=Used&make%5BAudi%5D=A5&body_type=Wagon",
+    "Demo": "https://www.zag.com.au/stock?condition=Demo&make%5BAudi%5D=A5&body_type=Wagon&fuel_type=Petrol",
+    "Used": "https://www.zag.com.au/stock?condition=Used&make%5BAudi%5D=A5&body_type=Wagon&fuel_type=Petrol",
 }
 
 HEADERS = {
@@ -98,10 +97,6 @@ def _parse_cards(soup: BeautifulSoup, scraped_at: str, condition: str = "Demo") 
         # km, consumption, body_type, fuel_type, dealer
         spans = [s.get_text(strip=True) for s in card.find_all("span") if s.get_text(strip=True)]
 
-        # Reject fully electric cars (e-tron, BEV) — include e-hybrid PHEVs
-        if _find_span(spans, ["electric", "e-tron"]):
-            continue
-
         # Title link has class "si-title"
         title_link = card.find("a", class_="si-title")
         href = title_link.get("href", "") if title_link else ""
@@ -146,11 +141,3 @@ def _parse_cards(soup: BeautifulSoup, scraped_at: str, condition: str = "Demo") 
         })
 
     return listings
-
-
-def _find_span(spans: list[str], keywords: list[str]) -> Optional[str]:
-    """Return the first span whose text matches any keyword (case-insensitive)."""
-    for span in spans:
-        if any(kw in span.lower() for kw in keywords):
-            return span
-    return None
