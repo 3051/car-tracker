@@ -1,5 +1,5 @@
 """
-Scrapes carsales.com.au for Audi A5 Avant petrol demo/near-new listings
+Scrapes autotrader.com.au for Audi A5 Avant petrol demo/near-new listings
 in Victoria using a real Playwright browser.
 """
 from __future__ import annotations
@@ -9,8 +9,10 @@ import json
 from datetime import datetime
 from typing import Optional
 
-# Simple URL — filter strictly in code rather than relying on OAG query syntax
-SEARCH_URL = "https://www.carsales.com.au/cars/audi/a5/"
+SEARCH_URL = (
+    "https://www.autotrader.com.au/cars"
+    "?make=Audi&model=A5&state=VIC"
+)
 
 
 def parse_price(text: str) -> Optional[float]:
