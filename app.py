@@ -68,16 +68,15 @@ with col_btn:
                     st.warning("No A5 Avant petrol demo listings found right now.")
                     with st.expander("🔍 Debug info"):
                         lines = [
-                            f"status:        {debug_info.get('status_code')}",
-                            f"page_title:    {debug_info.get('page_title')}",
-                            f"final_url:     {debug_info.get('final_url')}",
-                            f"links_found:   {debug_info.get('raw_cards_found')}",
-                            f"after_filter:  {debug_info.get('listings_after_filter')}",
+                            f"page_title:          {debug_info.get('page_title')}",
+                            f"final_url:           {debug_info.get('page_url')}",
+                            f"api_calls_captured:  {debug_info.get('api_calls_intercepted')}",
+                            f"listings_found:      {debug_info.get('listings_after_filter')}",
                             "",
-                            "--- sample links ---",
-                            "\n".join(debug_info.get("sample_links") or ["(none)"]),
+                            "--- api urls intercepted ---",
+                            "\n".join(debug_info.get("api_urls") or ["(none)"]),
                             "",
-                            "--- body html (first 5000 chars) ---",
+                            "--- body html snippet ---",
                             debug_info.get("html_snippet") or "(empty)",
                         ]
                         st.code("\n".join(lines))
