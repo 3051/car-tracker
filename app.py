@@ -67,17 +67,20 @@ with col_btn:
                 else:
                     st.warning("No A5 Avant petrol demo listings found right now.")
                     with st.expander("🔍 Debug info"):
-                        st.write(f"**Status:** {debug_info.get('status_code')}")
-                        st.write(f"**Page title:** {debug_info.get('page_title')}")
-                        st.write(f"**Final URL:** {debug_info.get('final_url')}")
-                        st.write(f"**Raw stock/details links found:** {debug_info.get('raw_cards_found')}")
-                        st.write(f"**After Avant/petrol filter:** {debug_info.get('listings_after_filter')}")
-                        if debug_info.get("sample_links"):
-                            st.write("**Sample links on page:**")
-                            st.code("\n".join(debug_info["sample_links"]))
-                        if debug_info.get("html_snippet"):
-                            st.write("**Body HTML (first 5000 chars):**")
-                            st.code(debug_info["html_snippet"], language="html")
+                        lines = [
+                            f"status:        {debug_info.get('status_code')}",
+                            f"page_title:    {debug_info.get('page_title')}",
+                            f"final_url:     {debug_info.get('final_url')}",
+                            f"links_found:   {debug_info.get('raw_cards_found')}",
+                            f"after_filter:  {debug_info.get('listings_after_filter')}",
+                            "",
+                            "--- sample links ---",
+                            "\n".join(debug_info.get("sample_links") or ["(none)"]),
+                            "",
+                            "--- body html (first 5000 chars) ---",
+                            debug_info.get("html_snippet") or "(empty)",
+                        ]
+                        st.code("\n".join(lines))
             except Exception as e:
                 st.error(f"Scrape failed: {e}")
 
