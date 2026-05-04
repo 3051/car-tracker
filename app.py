@@ -52,7 +52,7 @@ init_db()
 col_title, col_btn = st.columns([3, 1])
 with col_title:
     st.markdown("## 🔴 Audi A5 Avant — Demo Petrol Tracker")
-    st.caption("Melbourne & Victoria · Sourced from audi.com.au · Petrol demos only")
+    st.caption("Victoria · Sourced from carsales.com.au · A5 Avant · Petrol · Demo/Near-New")
 
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
@@ -89,11 +89,11 @@ latest = get_latest_listings()
 history = load_history()
 
 if not latest:
-    st.info("👆 Click **Refresh listings now** to scrape audi.com.au for current A5 Avant petrol demo stock around Melbourne.")
+    st.info("👆 Click **Refresh listings now** to scrape carsales.com.au for current A5 Avant petrol demo/near-new stock in Victoria.")
     st.markdown("""
     **What this app does:**
-    - Uses a real browser (Playwright) to load the Audi Australia used car search
-    - Filters for: A5 Avant · Petrol · Demonstrator · Victoria
+    - Uses a real browser (Playwright) to load carsales.com.au
+    - Filters for: A5 Avant · Petrol · Demo or Near-New · Victoria
     - Saves every snapshot so you can track price changes over time
     - Alerts you when new listings appear or prices drop
     """)
@@ -224,7 +224,7 @@ with st.expander("📊 Raw data / export"):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     st.markdown("**Search filters** (read-only — hardcoded for accuracy)")
-    st.code("Model: A5\nBody: Avant (Wagon)\nFuel: Petrol\nCondition: Demo\nState: VIC\nRadius: 150km of Melbourne", language=None)
+    st.code("Model: A5\nBody: Avant (Wagon)\nFuel: Petrol\nCondition: Demo / Near-New\nState: VIC\nSource: carsales.com.au", language=None)
 
     st.divider()
     st.markdown("### 📅 Scrape history")
@@ -237,4 +237,4 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ℹ️ About")
-    st.caption("Scrapes [audi.com.au](https://www.audi.com.au/en/audi-used-car-search/) using Playwright. Deploy free on [Streamlit Cloud](https://streamlit.io/cloud) or [Railway](https://railway.app).")
+    st.caption("Scrapes [carsales.com.au](https://www.carsales.com.au/cars/audi/a5/) using Playwright. Deploy free on [Streamlit Cloud](https://streamlit.io/cloud) or [Railway](https://railway.app).")

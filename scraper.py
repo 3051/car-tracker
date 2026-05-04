@@ -1,6 +1,6 @@
 """
-Scrapes audi.com.au/en/audi-used-car-search/ for A5 Avant petrol demo listings
-near Melbourne using a real Playwright browser (handles JS-rendered content).
+Scrapes carsales.com.au for Audi A5 Avant petrol demo/near-new listings
+in Victoria using a real Playwright browser.
 """
 
 import re
@@ -9,40 +9,28 @@ from datetime import datetime
 from typing import Optional
 
 SEARCH_URL = (
-    "https://www.audi.com.au/en/audi-used-car-search/"
-    "?modelrange=A5"
-    "&bodystyle=AVANT"
-    "&fueltype=PETROL"
-    "&condition=DEMONSTRATION"
-    "&postcode=3000"
-    "&radius=150"
+    "https://www.carsales.com.au/cars/audi/a5/"
+    "?q=(And.(C.Make.Audi._.Model.A5._.BodyStyle.Wagon."
+    "_.Condition.(Or.Demo.%60Near-New%60.)."
+    "_.FuelType.Petrol._.State.VIC.))"
 )
 
 
 def parse_price(text: str) -> Optional[float]:
-    """Extract numeric price from a string like '$98,990 drive away'."""
     if not text:
         return None
-    digits = re.sub(r"[^\d]", "", text)
+    digits = re.sub(r"[^\d]", "", str(text))
     return float(digits) if digits else None
 
 
 def parse_odometer(text: str) -> Optional[int]:
-    """Extract odometer km from strings like '1,147 kms' or '1147km'."""
     if not text:
         return None
-    digits = re.sub(r"[^\d]", "", text)
+    digits = re.sub(r"[^\d]", "", str(text))
     return int(digits) if digits else None
 
 
 def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]:
-    """
-    Launch a headless Chromium browser, navigate to the Audi AU used car search
-    filtered for A5 Avant Petrol Demo listings, wait for results to render,
-    then extract and return structured listing data.
-
-    If debug=True, returns (listings, debug_info) instead of just listings.
-    """
     import subprocess
     subprocess.run(["playwright", "install", "chromium"], capture_output=True)
 
@@ -50,6 +38,10 @@ def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]
 
     listings = []
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    api_results = []
+    page_title = ""
+    page_url = ""
+    page_text_snippet = ""
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -64,53 +56,48 @@ def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]
         )
         page = context.new_page()
 
-        # Intercept ALL JSON API responses (broadened from keyword filter)
-        api_results = []
-
         def handle_response(response):
-            url = response.url
             ct = response.headers.get("content-type", "")
             if "json" in ct:
                 try:
                     body = response.json()
-                    api_results.append({"url": url, "body": body})
+                    api_results.append({"url": response.url, "body": body})
                 except Exception:
                     pass
 
         page.on("response", handle_response)
 
-        # Navigate and wait for listing cards to appear
-        page.goto(SEARCH_URL, wait_until="networkidle", timeout=45000)
+        page.goto(SEARCH_URL, wait_until="networkidle", timeout=60000)
 
         page_title = page.title()
         page_url = page.url
 
-        # Give the SPA extra time to render
+        # Wait for listing cards
         try:
             page.wait_for_selector(
-                "[class*='result'], [class*='listing'], [class*='vehicle-card'], "
-                "[class*='car-tile'], [class*='search-result']",
+                "[data-webm*='listing'], [class*='listing'], "
+                "[class*='card'], [class*='result']",
                 timeout=15000,
             )
         except Exception:
             pass
 
-        page_text_snippet = page.inner_text("body")[:2000] if debug else ""
+        if debug:
+            page_text_snippet = page.inner_text("body")[:3000]
 
-        # --- Strategy 1: Parse intercepted API JSON responses ---
-        for api_call in api_results:
-            body = api_call["body"]
-            extracted = _parse_api_response(body, scraped_at)
+        # Strategy 1: parse intercepted API JSON
+        for call in api_results:
+            extracted = _parse_api_response(call["body"], scraped_at)
             if extracted:
                 listings.extend(extracted)
 
-        # --- Strategy 2: Scrape the rendered DOM ---
+        # Strategy 2: DOM scrape
         if not listings:
             listings = _scrape_dom(page, scraped_at)
 
         browser.close()
 
-    # Deduplicate by stock number or URL
+    # Deduplicate
     seen = set()
     unique = []
     for l in listings:
@@ -120,39 +107,30 @@ def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]
             unique.append(l)
 
     if debug:
-        debug_info = {
+        return unique, {
             "page_title": page_title,
             "page_url": page_url,
             "api_calls_intercepted": len(api_results),
             "api_urls": [r["url"] for r in api_results],
             "page_text_snippet": page_text_snippet,
         }
-        return unique, debug_info
-
     return unique
 
 
-def _parse_api_response(body: dict | list, scraped_at: str) -> list[dict]:
-    """
-    Try to extract listing data from a JSON API response body.
-    Handles common response shapes from Audi / VW Group search APIs.
-    """
+def _parse_api_response(body, scraped_at: str) -> list[dict]:
     listings = []
 
-    # Flatten if wrapped
+    # Unwrap common envelope shapes
     if isinstance(body, dict):
-        # Try common wrapper keys
-        for key in ["data", "results", "vehicles", "items", "listings", "content"]:
-            if key in body and isinstance(body[key], list):
-                body = body[key]
+        for key in ["results", "data", "items", "listings", "vehicles", "content"]:
+            val = body.get(key)
+            if isinstance(val, list):
+                body = val
                 break
-        else:
-            if "vehicles" in body:
-                body = body["vehicles"]
-            elif isinstance(body.get("data"), dict):
-                for k in ["vehicles", "results", "items"]:
-                    if k in body["data"]:
-                        body = body["data"][k]
+            if isinstance(val, dict):
+                for k2 in ["results", "items", "listings", "vehicles"]:
+                    if isinstance(val.get(k2), list):
+                        body = val[k2]
                         break
 
     if not isinstance(body, list):
@@ -162,50 +140,63 @@ def _parse_api_response(body: dict | list, scraped_at: str) -> list[dict]:
         if not isinstance(item, dict):
             continue
 
-        # Try to extract fields with multiple fallback key names
         def get(*keys):
             for k in keys:
                 v = item.get(k)
                 if v is not None:
                     return v
-                # nested — e.g. item["vehicle"]["price"]
                 for sub in item.values():
-                    if isinstance(sub, dict) and k in sub:
-                        return sub[k]
+                    if isinstance(sub, dict):
+                        v = sub.get(k)
+                        if v is not None:
+                            return v
             return None
 
-        title = get("title", "name", "modelName", "description") or ""
-        # Only keep A5 Avant petrol demos
-        title_lower = (title or "").lower()
-        body_style = (get("bodyStyle", "bodystyle", "body_style", "bodyType") or "").lower()
-        fuel = (get("fuelType", "fuel_type", "fuel") or "").lower()
-        condition = (get("condition", "vehicleCondition") or "").lower()
+        title = str(get("title", "name", "description", "heading") or "")
+        title_lower = title.lower()
 
-        # Filter: must be Avant (wagon), petrol, demo
-        if body_style and "avant" not in body_style and "wagon" not in body_style:
+        # Must mention A5
+        if "a5" not in title_lower:
             continue
+
+        # Must be Avant / wagon
+        body_style = str(get("bodyStyle", "body_style", "bodyType", "style") or "").lower()
+        if body_style and "wagon" not in body_style and "avant" not in body_style:
+            # Fall back to checking title
+            if "avant" not in title_lower and "wagon" not in title_lower:
+                continue
+
+        # Must be petrol
+        fuel = str(get("fuelType", "fuel_type", "fuel", "fueltype") or "").lower()
         if fuel and "petrol" not in fuel and "tfsi" not in fuel:
             continue
-        if condition and "demo" not in condition and "demonstration" not in condition:
+
+        # Must be demo or near-new
+        condition = str(get("condition", "vehicleCondition", "stockType") or "").lower()
+        if condition and not any(k in condition for k in ["demo", "near", "new"]):
             continue
 
-        price_raw = get("price", "driveAwayPrice", "priceDisplay", "retailPrice")
-        price = parse_price(str(price_raw)) if price_raw else None
+        price_raw = get("price", "driveAwayPrice", "advertisedPrice", "priceValue", "retailPrice")
+        price = parse_price(price_raw)
 
-        odo_raw = get("odometer", "mileage", "kilometres", "km")
-        odo = parse_odometer(str(odo_raw)) if odo_raw else None
+        odo_raw = get("odometer", "kilometres", "km", "mileage", "kms")
+        odo = parse_odometer(odo_raw)
+
+        url = str(get("url", "detailUrl", "listingUrl", "href", "link") or "")
+        if url and not url.startswith("http"):
+            url = "https://www.carsales.com.au" + url
 
         listings.append({
             "title": title,
-            "dealer": get("dealerName", "dealer", "dealership", "sellerName") or "Audi Dealer",
-            "suburb": get("suburb", "dealerSuburb", "location", "city") or "",
+            "dealer": str(get("dealer", "dealerName", "sellerName", "seller") or "Audi Dealer"),
+            "suburb": str(get("suburb", "location", "city", "dealerSuburb") or ""),
             "price": price,
             "odometer": odo,
-            "colour": get("colour", "color", "exteriorColour", "exteriorColor") or "",
-            "variant": get("variant", "modelVariant", "grade", "trim") or title,
-            "stock_no": str(get("stockNumber", "stock_no", "stockNo", "id") or ""),
-            "vin": get("vin", "VIN") or "",
-            "url": get("url", "detailUrl", "listingUrl", "link") or "",
+            "colour": str(get("colour", "color", "exteriorColour", "exteriorColor") or ""),
+            "variant": str(get("variant", "badge", "grade", "trim", "series") or title),
+            "stock_no": str(get("stockNumber", "stockNo", "stock_no", "id", "listingId") or ""),
+            "vin": str(get("vin", "VIN") or ""),
+            "url": url,
             "scraped_at": scraped_at,
             "is_new": True,
         })
@@ -214,43 +205,34 @@ def _parse_api_response(body: dict | list, scraped_at: str) -> list[dict]:
 
 
 def _scrape_dom(page, scraped_at: str) -> list[dict]:
-    """
-    Fall back to scraping the rendered HTML DOM when API interception doesn't work.
-    Tries multiple common selector patterns used by Audi/VW Group SPA templates.
-    """
     listings = []
 
-    # Try to get all result cards using various likely selectors
     card_selectors = [
-        "[class*='vehicle-card']",
-        "[class*='car-result']",
+        "[data-webm*='listing-item']",
         "[class*='listing-item']",
+        "[class*='vehicle-card']",
+        "[class*='car-card']",
         "[class*='result-item']",
-        "[class*='car-tile']",
-        "[data-type='vehicle']",
-        "[class*='search-result-item']",
-        "[class*='stock-item']",
+        "article[class*='card']",
         "article",
     ]
 
     cards = []
     for sel in card_selectors:
         try:
-            cards = page.query_selector_all(sel)
-            if len(cards) >= 1:
+            found = page.query_selector_all(sel)
+            if found:
+                cards = found
                 break
         except Exception:
             continue
 
-    # If still no cards, grab the full page text and try to parse it
     if not cards:
+        # Try JSON embedded in script tags
         try:
-            # Look for JSON embedded in a script tag (common in SSR/hydration)
-            scripts = page.query_selector_all("script[type='application/json'], script[type='application/ld+json']")
-            for script in scripts:
+            for script in page.query_selector_all("script[type='application/json'], script[type='application/ld+json']"):
                 try:
-                    content = script.inner_text()
-                    data = json.loads(content)
+                    data = json.loads(script.inner_text())
                     parsed = _parse_api_response(data, scraped_at)
                     if parsed:
                         listings.extend(parsed)
@@ -263,34 +245,28 @@ def _scrape_dom(page, scraped_at: str) -> list[dict]:
     for card in cards:
         try:
             text = card.inner_text()
-            # Skip if clearly not an A5 Avant petrol demo
-            text_lower = text.lower()
-            if "a5" not in text_lower:
+            if "a5" not in text.lower():
                 continue
 
-            # Try to find price
             price_match = re.search(r"\$[\d,]+", text)
             price = parse_price(price_match.group()) if price_match else None
 
-            # Try to find odometer
             odo_match = re.search(r"([\d,]+)\s*k(?:m|ms)\b", text, re.IGNORECASE)
             odo = parse_odometer(odo_match.group(1)) if odo_match else None
 
-            # Try to get link
             url = ""
             try:
                 link = card.query_selector("a")
                 if link:
                     url = link.get_attribute("href") or ""
                     if url and not url.startswith("http"):
-                        url = "https://www.audi.com.au" + url
+                        url = "https://www.carsales.com.au" + url
             except Exception:
                 pass
 
-            # Extract dealer name — usually a visible text element
             dealer = "Audi Dealer"
             try:
-                for sel in ["[class*='dealer']", "[class*='location']", "[class*='seller']"]:
+                for sel in ["[class*='dealer']", "[class*='seller']", "[class*='location']"]:
                     el = card.query_selector(sel)
                     if el:
                         dealer = el.inner_text().strip()[:80]
@@ -305,7 +281,7 @@ def _scrape_dom(page, scraped_at: str) -> list[dict]:
                 "price": price,
                 "odometer": odo,
                 "colour": "",
-                "variant": "A5 Avant TFSI Petrol",
+                "variant": "Audi A5 Avant",
                 "stock_no": "",
                 "vin": "",
                 "url": url,
