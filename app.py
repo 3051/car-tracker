@@ -70,10 +70,13 @@ with col_btn:
                         st.write(f"**Status:** {debug_info.get('status_code')}")
                         st.write(f"**Page title:** {debug_info.get('page_title')}")
                         st.write(f"**Final URL:** {debug_info.get('final_url')}")
-                        st.write(f"**Raw A5 cards found:** {debug_info.get('raw_cards_found')}")
+                        st.write(f"**Raw stock/details links found:** {debug_info.get('raw_cards_found')}")
                         st.write(f"**After Avant/petrol filter:** {debug_info.get('listings_after_filter')}")
+                        if debug_info.get("sample_links"):
+                            st.write("**Sample links on page:**")
+                            st.code("\n".join(debug_info["sample_links"]))
                         if debug_info.get("html_snippet"):
-                            st.write("**Page HTML (first 3000 chars):**")
+                            st.write("**Body HTML (first 5000 chars):**")
                             st.code(debug_info["html_snippet"], language="html")
             except Exception as e:
                 st.error(f"Scrape failed: {e}")
