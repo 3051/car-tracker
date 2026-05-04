@@ -74,7 +74,6 @@ with col_btn:
                             lines += [
                                 f"=== {condition} ===",
                                 f"status:              {info.get('status_code')}",
-                                f"response_keys:       {info.get('response_keys')}",
                                 f"html_length:         {info.get('html_length')}",
                                 f"total_detail_links:  {info.get('total_detail_links')}",
                                 f"listings_found:      {info.get('listings_after_filter')}",

@@ -1,8 +1,8 @@
 """
-Scrapes the Zagame Automotive stock API (zag.com.au) for
-Audi A5 Avant (Wagon) petrol demo and used listings.
+Scrapes zag.com.au for Audi A5 Avant (Wagon) demo and used listings.
 
-The API endpoint returns {"html": "...listing cards..."} — JSON-wrapped HTML.
+Fetches the server-rendered HTML pages directly — the /stockapi/results
+AJAX endpoint ignores make/body_type filters and returns all stock.
 No browser needed.
 """
 from __future__ import annotations
@@ -17,15 +17,12 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.zag.com.au"
 
-CONDITION_URLS = {
-    "Demo": (
-        "https://www.zag.com.au/stockapi/results"
-        "?make=Audi&model=A5&condition=Demo"
-    ),
-    "Used": (
-        "https://www.zag.com.au/stockapi/results"
-        "?make=Audi&model=A5&condition=Used"
-    ),
+# HTML pages — server-side filtered to A5 Avant (Wagon) per condition.
+# The /stockapi/results AJAX endpoint ignores make/body_type params;
+# scraping the HTML pages directly is the only way to get pre-filtered results.
+CONDITION_PAGES = {
+    "Demo": "https://www.zag.com.au/stock?condition=Demo&make%5BAudi%5D=A5&body_type=Wagon",
+    "Used": "https://www.zag.com.au/stock?condition=Used&make%5BAudi%5D=A5&body_type=Wagon",
 }
 
 HEADERS = {
@@ -33,9 +30,8 @@ HEADERS = {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/html, */*",
-    "Referer": "https://www.zag.com.au/stock/list-all?make=Audi&model=A5",
-    "X-Requested-With": "XMLHttpRequest",
+    "Accept": "text/html,application/xhtml+xml,*/*",
+    "Accept-Language": "en-AU,en;q=0.9",
 }
 
 
@@ -59,12 +55,11 @@ def scrape_listings(debug: bool = False):
     debug_info = {}
 
     with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
-        for condition, url in CONDITION_URLS.items():
+        for condition, url in CONDITION_PAGES.items():
             resp = client.get(url)
             resp.raise_for_status()
 
-            data = resp.json()
-            html = data.get("html", "") if isinstance(data, dict) else resp.text
+            html = resp.text
             soup = BeautifulSoup(html, "lxml")
             listings = _parse_cards(soup, scraped_at, condition)
             all_listings.extend(listings)
@@ -74,7 +69,6 @@ def scrape_listings(debug: bool = False):
                 detail_links = [l for l in all_links if "stock/details" in l]
                 debug_info[condition] = {
                     "status_code": resp.status_code,
-                    "response_keys": list(data.keys()) if isinstance(data, dict) else "not json",
                     "html_length": len(html),
                     "total_detail_links": len(detail_links),
                     "listings_after_filter": len(listings),
@@ -99,15 +93,13 @@ def _parse_cards(soup: BeautifulSoup, scraped_at: str, condition: str = "Demo") 
         if "a5" not in card_text.lower():
             continue
 
-        # Spec spans are inline elements — collect all non-empty span texts
+        # Spec spans follow a fixed order:
+        # year, make, model, variant, price, "Drive Away", condition,
+        # km, consumption, body_type, fuel_type, dealer
         spans = [s.get_text(strip=True) for s in card.find_all("span") if s.get_text(strip=True)]
 
-        # Must be Wagon/Avant body type
-        if not _find_span(spans, ["wagon", "avant"]):
-            continue
-
-        # Must be petrol (reject electric/hybrid)
-        if _find_span(spans, ["electric", "hybrid", "e-tron", "phev"]):
+        # Reject fully electric cars (e-tron, BEV) — include e-hybrid PHEVs
+        if _find_span(spans, ["electric", "e-tron"]):
             continue
 
         # Title link has class "si-title"
@@ -122,13 +114,8 @@ def _parse_cards(soup: BeautifulSoup, scraped_at: str, condition: str = "Demo") 
         stock_no = card.get("data-stockno", "")
         vin = card.get("data-vin", "")
 
-        # Dealer — look for a dedicated element, fall back to "Zagame Audi"
-        dealer = "Zagame Audi"
-        for cls_hint in ["si-dealer", "dealer", "location", "branch", "showroom"]:
-            el = card.find(class_=re.compile(cls_hint, re.I))
-            if el:
-                dealer = el.get_text(strip=True)[:80]
-                break
+        # Dealer is the last span (e.g. "Audi Centre Brighton")
+        dealer = spans[-1] if spans else "Zagame Audi"
 
         # Colour
         colour = ""
