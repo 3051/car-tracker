@@ -32,9 +32,14 @@ def init_db():
                 variant     TEXT,
                 url         TEXT,
                 is_new      INTEGER DEFAULT 0,
+                condition   TEXT DEFAULT 'Demo',
                 raw_json    TEXT
             )
         """)
+        # Migrate existing DBs that lack the condition column
+        existing = {row[1] for row in con.execute("PRAGMA table_info(listings)")}
+        if "condition" not in existing:
+            con.execute("ALTER TABLE listings ADD COLUMN condition TEXT DEFAULT 'Demo'")
         con.execute("""
             CREATE TABLE IF NOT EXISTS snapshots (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +93,7 @@ def save_listings(listings: list[dict]):
             l.get("variant", ""),
             l.get("url", ""),
             is_new,
+            l.get("condition", "Demo"),
             json.dumps(l),
         ))
 
@@ -95,8 +101,8 @@ def save_listings(listings: list[dict]):
         con.executemany("""
             INSERT INTO listings
                 (scraped_at, stock_no, vin, title, dealer, suburb, price,
-                 odometer, colour, variant, url, is_new, raw_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 odometer, colour, variant, url, is_new, condition, raw_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, rows)
         con.execute(
             "INSERT INTO snapshots (scraped_at, count) VALUES (?,?)",
@@ -115,13 +121,13 @@ def get_latest_listings() -> list[dict]:
         latest_at = row[0]
         rows = con.execute(
             """SELECT dealer, suburb, price, odometer, colour, variant,
-                      stock_no, vin, url, scraped_at, is_new
+                      stock_no, vin, url, scraped_at, is_new, condition
                FROM listings WHERE scraped_at = ?
                ORDER BY price ASC NULLS LAST""",
             (latest_at,)
         ).fetchall()
         cols = ["dealer", "suburb", "price", "odometer", "colour", "variant",
-                "stock_no", "vin", "url", "scraped_at", "is_new"]
+                "stock_no", "vin", "url", "scraped_at", "is_new", "condition"]
         return [dict(zip(cols, r)) for r in rows]
 
 
@@ -130,12 +136,12 @@ def load_history() -> list[dict]:
     with _conn() as con:
         rows = con.execute(
             """SELECT dealer, suburb, price, odometer, colour, variant,
-                      stock_no, vin, url, scraped_at, is_new
+                      stock_no, vin, url, scraped_at, is_new, condition
                FROM listings
                ORDER BY scraped_at ASC"""
         ).fetchall()
         cols = ["dealer", "suburb", "price", "odometer", "colour", "variant",
-                "stock_no", "vin", "url", "scraped_at", "is_new"]
+                "stock_no", "vin", "url", "scraped_at", "is_new", "condition"]
         return [dict(zip(cols, r)) for r in rows]
 
 
