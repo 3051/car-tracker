@@ -1,27 +1,20 @@
 """
 Scrapes zag.com.au (Zagame Automotive — 5 Audi dealers in VIC) for
-Audi A5 Avant (Wagon) petrol demo listings using httpx + BeautifulSoup.
+Audi A5 Avant (Wagon) petrol demo listings using Playwright.
+zag.com.au loads listings dynamically via the AdTorque Edge platform.
 """
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime
 from typing import Optional
 
-import httpx
-from bs4 import BeautifulSoup
-
+STOCK_URL = (
+    "https://www.zag.com.au/stock/list-all"
+    "?make=Audi&model=A5&condition=Demo"
+)
 BASE_URL = "https://www.zag.com.au"
-STOCK_URL = f"{BASE_URL}/stock/list-all?make=Audi&model=A5&condition=Demo"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-AU,en;q=0.9",
-}
 
 
 def parse_price(text: str) -> Optional[float]:
@@ -39,108 +32,207 @@ def parse_odometer(text: str) -> Optional[int]:
 
 
 def scrape_listings(debug: bool = False):
+    import subprocess
+    subprocess.run(["playwright", "install", "chromium"], capture_output=True)
+
+    from playwright.sync_api import sync_playwright
+
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M")
-    debug_info: dict = {}
+    api_calls: list[dict] = []
+    listings: list[dict] = []
 
-    with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
-        resp = client.get(STOCK_URL)
-        resp.raise_for_status()
-
-    soup = BeautifulSoup(resp.text, "lxml")
-
-    if debug:
-        debug_info["status_code"] = resp.status_code
-        debug_info["final_url"] = str(resp.url)
-        debug_info["page_title"] = soup.title.string if soup.title else ""
-        # Show body content (skip <head>) to see actual listing HTML
-        body = soup.find("body")
-        body_html = body.decode_contents() if body else resp.text
-        debug_info["html_snippet"] = body_html[:5000]
-        # Count ALL links to understand URL patterns
-        all_links = [a.get("href", "") for a in soup.find_all("a", href=True)]
-        debug_info["sample_links"] = [l for l in all_links if l][:20]
-
-    listings = _parse_listings(soup, scraped_at)
-
-    if debug:
-        debug_info["raw_cards_found"] = len(
-            soup.find_all("a", href=re.compile(r"stock/details", re.I))
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 900},
+            locale="en-AU",
         )
-        debug_info["listings_after_filter"] = len(listings)
-        return listings, debug_info
+        page = context.new_page()
 
-    return listings
+        # Intercept ALL JSON responses — AdTorque Edge delivers listings via API
+        def on_response(response):
+            ct = response.headers.get("content-type", "")
+            if "json" in ct:
+                try:
+                    body = response.json()
+                    api_calls.append({"url": response.url, "body": body})
+                except Exception:
+                    pass
 
+        page.on("response", on_response)
 
-def _parse_listings(soup: BeautifulSoup, scraped_at: str) -> list[dict]:
-    # Find all unique detail-page links
+        page.goto(STOCK_URL, wait_until="networkidle", timeout=60000)
+
+        # Wait for listing cards to appear
+        try:
+            page.wait_for_selector(
+                "a[href*='stock/details'], [class*='vehicle'], [class*='listing'], [class*='card']",
+                timeout=15000,
+            )
+        except Exception:
+            pass
+
+        page_title = page.title()
+        page_url = page.url
+        page_html = page.content() if debug else ""
+
+        # Strategy 1: intercepted JSON from AdTorque Edge API
+        for call in api_calls:
+            found = _parse_api_json(call["body"], scraped_at)
+            listings.extend(found)
+
+        # Strategy 2: DOM scraping
+        if not listings:
+            listings = _scrape_dom(page, scraped_at)
+
+        browser.close()
+
+    # Deduplicate
     seen: set = set()
+    unique = []
+    for l in listings:
+        key = l.get("stock_no") or l.get("url") or l.get("title", "")
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(l)
+
+    if debug:
+        return unique, {
+            "page_title": page_title,
+            "page_url": page_url,
+            "api_calls_intercepted": len(api_calls),
+            "api_urls": [c["url"] for c in api_calls],
+            "listings_after_filter": len(unique),
+            "html_snippet": page_html[page_html.find("<body"):page_html.find("<body") + 5000] if page_html else "",
+        }
+    return unique
+
+
+def _is_avant_petrol_demo(text: str) -> bool:
+    t = text.lower()
+    if "a5" not in t:
+        return False
+    if "wagon" not in t and "avant" not in t:
+        return False
+    if any(k in t for k in ["e-tron", "phev", "plug-in", "electric"]):
+        return False
+    return True
+
+
+def _parse_api_json(body, scraped_at: str, depth: int = 0) -> list[dict]:
+    """Recursively search any JSON for listing-shaped objects."""
+    if depth > 8:
+        return []
+    results = []
+    if isinstance(body, list):
+        for item in body:
+            if isinstance(item, dict):
+                text = json.dumps(item)
+                if _is_avant_petrol_demo(text):
+                    listing = _extract_from_dict(item, scraped_at)
+                    if listing:
+                        results.append(listing)
+                else:
+                    results.extend(_parse_api_json(item, scraped_at, depth + 1))
+            else:
+                results.extend(_parse_api_json(item, scraped_at, depth + 1))
+    elif isinstance(body, dict):
+        text = json.dumps(body)
+        if _is_avant_petrol_demo(text) and any(k in body for k in ["price", "Price", "driveAway"]):
+            listing = _extract_from_dict(body, scraped_at)
+            if listing:
+                results.append(listing)
+        else:
+            for v in body.values():
+                if isinstance(v, (dict, list)):
+                    results.extend(_parse_api_json(v, scraped_at, depth + 1))
+    return results
+
+
+def _extract_from_dict(item: dict, scraped_at: str) -> Optional[dict]:
+    def get(*keys):
+        for k in keys:
+            v = item.get(k)
+            if v is not None:
+                return v
+            for sub in item.values():
+                if isinstance(sub, dict):
+                    v = sub.get(k)
+                    if v is not None:
+                        return v
+        return None
+
+    title = str(get("title", "name", "heading", "description", "vehicleName") or "")
+    if not title:
+        return None
+
+    url = str(get("url", "href", "detailUrl", "link") or "")
+    if url and not url.startswith("http"):
+        url = BASE_URL + url
+
+    return {
+        "title": title,
+        "dealer": str(get("dealer", "dealerName", "location", "branch") or "Zagame Audi"),
+        "suburb": str(get("suburb", "city", "area") or ""),
+        "price": parse_price(str(get("price", "driveAway", "advertisedPrice") or "")),
+        "odometer": parse_odometer(str(get("odometer", "kilometres", "km") or "")),
+        "colour": str(get("colour", "color", "exteriorColour") or ""),
+        "variant": str(get("variant", "badge", "grade", "series") or title),
+        "stock_no": str(get("stockNumber", "stockNo", "id", "listingId") or ""),
+        "vin": str(get("vin", "VIN") or ""),
+        "url": url,
+        "scraped_at": scraped_at,
+        "is_new": True,
+    }
+
+
+def _scrape_dom(page, scraped_at: str) -> list[dict]:
     listings = []
+    try:
+        links = page.query_selector_all("a[href*='stock/details']")
+        seen: set = set()
+        for link in links:
+            href = link.get_attribute("href") or ""
+            if not href or href in seen:
+                continue
+            seen.add(href)
 
-    for link in soup.find_all("a", href=re.compile(r"stock/details", re.I)):
-        href = link.get("href", "")
-        if not href or href in seen:
-            continue
-        seen.add(href)
+            card = None
+            for _ in range(5):
+                parent = link.evaluate_handle("el => el.parentElement")
+                text = parent.as_element().inner_text() if parent.as_element() else ""
+                if len(text) > 50:
+                    card_text = text
+                    break
+                link = parent.as_element()
+            else:
+                card_text = link.inner_text()
 
-        # Walk up to find the card container
-        card = link.find_parent(["article", "div", "li"])
-        if not card:
-            continue
+            if not _is_avant_petrol_demo(card_text):
+                continue
 
-        card_text = card.get_text(separator=" ", strip=True)
+            full_url = BASE_URL + href if href.startswith("/") else href
+            stock_m = re.search(r"OAG-AD-\d+", href)
 
-        # Must be A5
-        if "a5" not in card_text.lower():
-            continue
-
-        # Must be Avant/Wagon — not Hatch (Sportback)
-        if "wagon" not in card_text.lower() and "avant" not in card_text.lower():
-            continue
-
-        # Must be petrol (exclude e-tron, plug-in hybrid, electric)
-        text_lower = card_text.lower()
-        if any(k in text_lower for k in ["e-tron", "phev", "plug-in", "electric"]):
-            continue
-
-        # Title: prefer the link text from an <h3>, else the link itself
-        h_tag = card.find(["h2", "h3", "h4"])
-        title = (h_tag.get_text(strip=True) if h_tag else link.get_text(strip=True)) or ""
-
-        # Dealer name
-        dealer = "Zagame Audi"
-        for cls in ["dealer", "location", "branch", "showroom"]:
-            el = card.find(class_=re.compile(cls, re.I))
-            if el:
-                dealer = el.get_text(strip=True)[:80]
-                break
-
-        # Colour: often in title or a dedicated element
-        colour = ""
-        colour_match = re.search(
-            r"\b(white|black|grey|gray|silver|blue|red|green|brown|yellow|orange|"
-            r"mythos|navarra|glacier|daytona|manhattan|florett|merlin|tango|terra)\b",
-            card_text, re.IGNORECASE
-        )
-        if colour_match:
-            colour = colour_match.group(0).title()
-
-        full_url = BASE_URL + href if href.startswith("/") else href
-        stock_no_m = re.search(r"OAG-AD-\d+", href)
-
-        listings.append({
-            "title": title,
-            "dealer": dealer,
-            "suburb": "",
-            "price": parse_price(card_text),
-            "odometer": parse_odometer(card_text),
-            "colour": colour,
-            "variant": title,
-            "stock_no": stock_no_m.group(0) if stock_no_m else "",
-            "vin": "",
-            "url": full_url,
-            "scraped_at": scraped_at,
-            "is_new": True,
-        })
-
+            listings.append({
+                "title": card_text[:120].split("\n")[0].strip(),
+                "dealer": "Zagame Audi",
+                "suburb": "",
+                "price": parse_price(card_text),
+                "odometer": parse_odometer(card_text),
+                "colour": "",
+                "variant": "Audi A5 Avant",
+                "stock_no": stock_m.group(0) if stock_m else "",
+                "vin": "",
+                "url": full_url,
+                "scraped_at": scraped_at,
+                "is_new": True,
+            })
+    except Exception:
+        pass
     return listings
