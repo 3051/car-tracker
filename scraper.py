@@ -2,6 +2,7 @@
 Scrapes carsales.com.au for Audi A5 Avant petrol demo/near-new listings
 in Victoria using a real Playwright browser.
 """
+from __future__ import annotations
 
 import re
 import json
