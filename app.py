@@ -76,9 +76,9 @@ with col_btn:
                                 st.code(u)
                         else:
                             st.write("No JSON API calls were intercepted.")
-                        if debug_info["page_text_snippet"]:
-                            st.write("**Page text (first 2000 chars):**")
-                            st.text(debug_info["page_text_snippet"])
+                        if debug_info.get("page_html_snippet"):
+                            st.write("**Page HTML (first 4000 chars):**")
+                            st.code(debug_info["page_html_snippet"], language="html")
             except Exception as e:
                 st.error(f"Scrape failed: {e}")
 
