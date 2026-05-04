@@ -42,7 +42,16 @@ def scrape_listings(debug: bool = False):
     listings: list[dict] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",  # required in Docker/container — avoids /dev/shm crash
+                "--disable-gpu",
+                "--disable-setuid-sandbox",
+                "--single-process",
+            ],
+        )
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -66,13 +75,15 @@ def scrape_listings(debug: bool = False):
 
         page.on("response", on_response)
 
-        page.goto(STOCK_URL, wait_until="networkidle", timeout=60000)
+        page.goto(STOCK_URL, wait_until="domcontentloaded", timeout=60000)
+        # Give JS time to fire the AdTorque Edge API calls
+        page.wait_for_timeout(5000)
 
         # Wait for listing cards to appear
         try:
             page.wait_for_selector(
                 "a[href*='stock/details'], [class*='vehicle'], [class*='listing'], [class*='card']",
-                timeout=15000,
+                timeout=10000,
             )
         except Exception:
             pass
