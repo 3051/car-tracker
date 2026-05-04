@@ -52,13 +52,19 @@ def scrape_listings(debug: bool = False):
         debug_info["status_code"] = resp.status_code
         debug_info["final_url"] = str(resp.url)
         debug_info["page_title"] = soup.title.string if soup.title else ""
-        debug_info["html_snippet"] = resp.text[:3000]
+        # Show body content (skip <head>) to see actual listing HTML
+        body = soup.find("body")
+        body_html = body.decode_contents() if body else resp.text
+        debug_info["html_snippet"] = body_html[:5000]
+        # Count ALL links to understand URL patterns
+        all_links = [a.get("href", "") for a in soup.find_all("a", href=True)]
+        debug_info["sample_links"] = [l for l in all_links if l][:20]
 
     listings = _parse_listings(soup, scraped_at)
 
     if debug:
         debug_info["raw_cards_found"] = len(
-            soup.find_all("a", href=re.compile(r"/stock/details/"))
+            soup.find_all("a", href=re.compile(r"stock/details", re.I))
         )
         debug_info["listings_after_filter"] = len(listings)
         return listings, debug_info
@@ -71,7 +77,7 @@ def _parse_listings(soup: BeautifulSoup, scraped_at: str) -> list[dict]:
     seen: set = set()
     listings = []
 
-    for link in soup.find_all("a", href=re.compile(r"/stock/details/")):
+    for link in soup.find_all("a", href=re.compile(r"stock/details", re.I)):
         href = link.get("href", "")
         if not href or href in seen:
             continue
