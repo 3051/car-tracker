@@ -1,6 +1,6 @@
 """
 Scrapes the Zagame Automotive stock API (zag.com.au) for
-Audi A5 Avant (Wagon) petrol demo listings.
+Audi A5 Avant (Wagon) petrol demo and used listings.
 
 The API endpoint returns {"html": "...listing cards..."} — JSON-wrapped HTML.
 No browser needed.
@@ -15,11 +15,18 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 
-API_URL = (
-    "https://www.zag.com.au/stockapi/results"
-    "?make=Audi&model=A5&condition=Demo"
-)
 BASE_URL = "https://www.zag.com.au"
+
+CONDITION_URLS = {
+    "Demo": (
+        "https://www.zag.com.au/stockapi/results"
+        "?make=Audi&model=A5&condition=Demo"
+    ),
+    "Used": (
+        "https://www.zag.com.au/stockapi/results"
+        "?make=Audi&model=A5&condition=Used"
+    ),
+}
 
 HEADERS = {
     "User-Agent": (
@@ -27,7 +34,7 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/html, */*",
-    "Referer": "https://www.zag.com.au/stock/list-all?make=Audi&model=A5&condition=Demo",
+    "Referer": "https://www.zag.com.au/stock/list-all?make=Audi&model=A5",
     "X-Requested-With": "XMLHttpRequest",
 }
 
@@ -48,35 +55,40 @@ def parse_odometer(text: str) -> Optional[int]:
 
 def scrape_listings(debug: bool = False):
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    all_listings = []
+    debug_info = {}
 
     with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
-        resp = client.get(API_URL)
-        resp.raise_for_status()
+        for condition, url in CONDITION_URLS.items():
+            resp = client.get(url)
+            resp.raise_for_status()
 
-    # Response is {"html": "...escaped listing HTML..."}
-    data = resp.json()
-    html = data.get("html", "") if isinstance(data, dict) else resp.text
+            data = resp.json()
+            html = data.get("html", "") if isinstance(data, dict) else resp.text
+            soup = BeautifulSoup(html, "lxml")
+            listings = _parse_cards(soup, scraped_at, condition)
+            all_listings.extend(listings)
 
-    soup = BeautifulSoup(html, "lxml")
-    listings = _parse_cards(soup, scraped_at)
+            if debug:
+                all_links = [a.get("href", "") for a in soup.find_all("a", href=True)]
+                detail_links = [l for l in all_links if "stock/details" in l]
+                debug_info[condition] = {
+                    "status_code": resp.status_code,
+                    "response_keys": list(data.keys()) if isinstance(data, dict) else "not json",
+                    "html_length": len(html),
+                    "total_detail_links": len(detail_links),
+                    "listings_after_filter": len(listings),
+                    "sample_detail_links": detail_links[:5],
+                    "html_snippet": html[:2000],
+                }
 
     if debug:
-        all_links = [a.get("href", "") for a in soup.find_all("a", href=True)]
-        detail_links = [l for l in all_links if "stock/details" in l]
-        return listings, {
-            "status_code": resp.status_code,
-            "response_keys": list(data.keys()) if isinstance(data, dict) else "not json",
-            "html_length": len(html),
-            "total_detail_links": len(detail_links),
-            "listings_after_filter": len(listings),
-            "sample_detail_links": detail_links[:5],
-            "html_snippet": html[:3000],
-        }
+        return all_listings, debug_info
 
-    return listings
+    return all_listings
 
 
-def _parse_cards(soup: BeautifulSoup, scraped_at: str) -> list[dict]:
+def _parse_cards(soup: BeautifulSoup, scraped_at: str, condition: str = "Demo") -> list[dict]:
     listings = []
 
     # Each listing is a div.stock-item with data-stockno and data-vin attributes
@@ -143,6 +155,7 @@ def _parse_cards(soup: BeautifulSoup, scraped_at: str) -> list[dict]:
             "url": full_url,
             "scraped_at": scraped_at,
             "is_new": True,
+            "condition": condition,
         })
 
     return listings

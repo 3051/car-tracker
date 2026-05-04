@@ -37,6 +37,8 @@ st.markdown("""
     .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 99px; font-weight: 500; }
     .badge-best { background: #1D9E75; color: white; }
     .badge-new { background: #BB0A21; color: white; }
+    .badge-used { background: #555; color: #ccc; }
+    .badge-demo { background: #2a4a8a; color: #aac4ff; }
     h1, h2, h3 { color: #f0f0f0 !important; }
     .stButton button { background: #BB0A21 !important; color: white !important; border: none !important; }
     .stButton button:hover { background: #990818 !important; }
@@ -51,8 +53,8 @@ init_db()
 # --- Header ---
 col_title, col_btn = st.columns([3, 1])
 with col_title:
-    st.markdown("## 🔴 Audi A5 Avant — Demo Petrol Tracker")
-    st.caption("Victoria · Sourced from autotrader.com.au · A5 Avant · Petrol · Demo/Near-New")
+    st.markdown("## 🔴 Audi A5 Avant — Demo &amp; Used Petrol Tracker")
+    st.caption("Victoria · Sourced from zag.com.au · A5 Avant · Petrol · Demo &amp; Used")
 
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
@@ -65,21 +67,25 @@ with col_btn:
                     st.success(f"✅ Found {len(listings)} listing(s). Saved.")
                     st.rerun()
                 else:
-                    st.warning("No A5 Avant petrol demo listings found right now.")
+                    st.warning("No A5 Avant petrol listings found right now.")
                     with st.expander("🔍 Debug info"):
-                        lines = [
-                            f"status:              {debug_info.get('status_code')}",
-                            f"response_keys:       {debug_info.get('response_keys')}",
-                            f"html_length:         {debug_info.get('html_length')}",
-                            f"total_detail_links:  {debug_info.get('total_detail_links')}",
-                            f"listings_found:      {debug_info.get('listings_after_filter')}",
-                            "",
-                            "--- sample detail links ---",
-                            "\n".join(debug_info.get("sample_detail_links") or ["(none)"]),
-                            "",
-                            "--- html snippet ---",
-                            debug_info.get("html_snippet") or "(empty)",
-                        ]
+                        lines = []
+                        for condition, info in debug_info.items():
+                            lines += [
+                                f"=== {condition} ===",
+                                f"status:              {info.get('status_code')}",
+                                f"response_keys:       {info.get('response_keys')}",
+                                f"html_length:         {info.get('html_length')}",
+                                f"total_detail_links:  {info.get('total_detail_links')}",
+                                f"listings_found:      {info.get('listings_after_filter')}",
+                                "",
+                                "--- sample detail links ---",
+                                "\n".join(info.get("sample_detail_links") or ["(none)"]),
+                                "",
+                                "--- html snippet ---",
+                                info.get("html_snippet") or "(empty)",
+                                "",
+                            ]
                         st.code("\n".join(lines))
             except Exception as e:
                 st.error(f"Scrape failed: {e}")
@@ -91,11 +97,11 @@ latest = get_latest_listings()
 history = load_history()
 
 if not latest:
-    st.info("👆 Click **Refresh listings now** to scrape autotrader.com.au for current A5 Avant petrol demo/near-new stock in Victoria.")
+    st.info("👆 Click **Refresh listings now** to scrape zag.com.au for current A5 Avant petrol demo &amp; used stock.")
     st.markdown("""
     **What this app does:**
-    - Uses a real browser (Playwright) to load autotrader.com.au
-    - Filters for: A5 Avant · Petrol · Demo or Near-New · Victoria
+    - Hits the Zagame Automotive stock API (zag.com.au) directly — no browser needed
+    - Filters for: A5 Avant · Petrol · Demo and Used
     - Saves every snapshot so you can track price changes over time
     - Alerts you when new listings appear or prices drop
     """)
@@ -193,6 +199,8 @@ for _, row in df.sort_values("price").iterrows():
     card_class = "listing-card best" if is_best else "listing-card"
     best_badge = '<span class="badge badge-best">Lowest price</span>' if is_best else ""
     new_badge = '<span class="badge badge-new">New</span>' if row.get("is_new") else ""
+    cond = row.get("condition", "Demo")
+    cond_badge = f'<span class="badge badge-{"used" if cond == "Used" else "demo"}">{cond}</span>'
     link_html = f'<a href="{row["url"]}" target="_blank">View on audi.com.au ↗</a>' if row.get("url") else ""
     price_str = f"${row['price']:,.0f}" if pd.notna(row.get("price")) else "POA"
     odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
@@ -202,7 +210,7 @@ for _, row in df.sort_values("price").iterrows():
         <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
             <div>
                 <strong style="font-size:15px">{row.get('dealer','Unknown dealer')}</strong>
-                {best_badge} {new_badge}
+                {cond_badge} {best_badge} {new_badge}
                 <div style="font-size:12px; color:#888; margin-top:4px">{row.get('suburb','')} · {row.get('variant','A5 Avant TFSI Petrol')}</div>
                 <div style="font-size:12px; color:#888">{row.get('colour','—')} · {odo_str} · Auto</div>
                 {f'<div style="font-size:12px; margin-top:4px">{link_html}</div>' if link_html else ''}
@@ -226,7 +234,7 @@ with st.expander("📊 Raw data / export"):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     st.markdown("**Search filters** (read-only — hardcoded for accuracy)")
-    st.code("Model: A5\nBody: Avant (Wagon)\nFuel: Petrol\nCondition: Demo / Near-New\nState: VIC\nSource: autotrader.com.au", language=None)
+    st.code("Model: A5\nBody: Avant (Wagon)\nFuel: Petrol\nCondition: Demo + Used\nSource: zag.com.au", language=None)
 
     st.divider()
     st.markdown("### 📅 Scrape history")
@@ -239,4 +247,4 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ℹ️ About")
-    st.caption("Scrapes [autotrader.com.au](https://www.autotrader.com.au/cars/audi/a5/) using Playwright. Deploy free on [Streamlit Cloud](https://streamlit.io/cloud) or [Railway](https://railway.app).")
+    st.caption("Scrapes [zag.com.au](https://www.zag.com.au) stock API via httpx. Deploy free on [Streamlit Cloud](https://streamlit.io/cloud) or [Railway](https://railway.app).")
