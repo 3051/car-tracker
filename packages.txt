@@ -1,1 +1,1 @@
-# No system dependencies needed — scraper uses httpx, not Playwright
+
