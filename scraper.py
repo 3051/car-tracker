@@ -9,12 +9,8 @@ import json
 from datetime import datetime
 from typing import Optional
 
-SEARCH_URL = (
-    "https://www.carsales.com.au/cars/audi/a5/"
-    "?q=(And.(C.Make.Audi._.Model.A5._.BodyStyle.Wagon."
-    "_.Condition.(Or.Demo.%60Near-New%60.)."
-    "_.FuelType.Petrol._.State.VIC.))"
-)
+# Simple URL — filter strictly in code rather than relying on OAG query syntax
+SEARCH_URL = "https://www.carsales.com.au/cars/audi/a5/"
 
 
 def parse_price(text: str) -> Optional[float]:
@@ -31,18 +27,115 @@ def parse_odometer(text: str) -> Optional[int]:
     return int(digits) if digits else None
 
 
-def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]:
+def _is_relevant(item: dict) -> bool:
+    """Return True if the listing is an A5 Avant/Wagon, petrol, demo/near-new in VIC."""
+    def val(*keys) -> str:
+        for k in keys:
+            v = item.get(k)
+            if v:
+                return str(v).lower()
+            for sub in item.values():
+                if isinstance(sub, dict):
+                    v = sub.get(k)
+                    if v:
+                        return str(v).lower()
+        return ""
+
+    title = val("title", "name", "heading", "description")
+    if "a5" not in title:
+        return False
+
+    body = val("bodyStyle", "body_style", "bodyType", "style")
+    if body and "wagon" not in body and "avant" not in body:
+        if "avant" not in title and "wagon" not in title:
+            return False
+
+    fuel = val("fuelType", "fuel_type", "fuel")
+    if fuel and "petrol" not in fuel and "tfsi" not in fuel:
+        return False
+
+    condition = val("condition", "vehicleCondition", "stockType", "listingType")
+    if condition and not any(k in condition for k in ["demo", "near"]):
+        return False
+
+    state = val("state", "location", "suburb", "area", "sellerState")
+    if state and "vic" not in state and "victoria" not in state:
+        return False
+
+    return True
+
+
+def _extract_listing(item: dict, scraped_at: str) -> dict:
+    def get(*keys):
+        for k in keys:
+            v = item.get(k)
+            if v is not None:
+                return v
+            for sub in item.values():
+                if isinstance(sub, dict):
+                    v = sub.get(k)
+                    if v is not None:
+                        return v
+        return None
+
+    title = str(get("title", "name", "heading", "description") or "")
+    url = str(get("url", "href", "detailUrl", "listingUrl", "link") or "")
+    if url and not url.startswith("http"):
+        url = "https://www.carsales.com.au" + url
+
+    price_raw = get("price", "advertisedPrice", "driveAwayPrice", "priceValue")
+    odo_raw = get("odometer", "kilometres", "km", "mileage", "kms")
+
+    return {
+        "title": title,
+        "dealer": str(get("dealer", "dealerName", "sellerName", "seller") or "Audi Dealer"),
+        "suburb": str(get("suburb", "location", "city", "area") or ""),
+        "price": parse_price(price_raw),
+        "odometer": parse_odometer(odo_raw),
+        "colour": str(get("colour", "color", "exteriorColour") or ""),
+        "variant": str(get("variant", "badge", "grade", "trim", "series") or title),
+        "stock_no": str(get("stockNumber", "stockNo", "stock_no", "id", "listingId") or ""),
+        "vin": str(get("vin", "VIN") or ""),
+        "url": url,
+        "scraped_at": scraped_at,
+        "is_new": True,
+    }
+
+
+def _search_json(obj, scraped_at: str, depth: int = 0) -> list[dict]:
+    """Recursively search any JSON structure for listing-shaped objects."""
+    if depth > 8:
+        return []
+    listings = []
+    if isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, dict) and _is_relevant(item):
+                listings.append(_extract_listing(item, scraped_at))
+            else:
+                listings.extend(_search_json(item, scraped_at, depth + 1))
+    elif isinstance(obj, dict):
+        # If this dict itself looks like a listing, extract it
+        if _is_relevant(obj):
+            listings.append(_extract_listing(obj, scraped_at))
+        else:
+            for v in obj.values():
+                if isinstance(v, (dict, list)):
+                    listings.extend(_search_json(v, scraped_at, depth + 1))
+    return listings
+
+
+def scrape_listings(debug: bool = False):
     import subprocess
     subprocess.run(["playwright", "install", "chromium"], capture_output=True)
 
     from playwright.sync_api import sync_playwright
 
-    listings = []
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    listings = []
     api_results = []
     page_title = ""
     page_url = ""
-    page_text_snippet = ""
+    page_html_snippet = ""
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -68,38 +161,58 @@ def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]
 
         page.on("response", handle_response)
 
-        page.goto(SEARCH_URL, wait_until="networkidle", timeout=60000)
+        page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
+        # Give JS time to execute and render
+        page.wait_for_timeout(4000)
 
         page_title = page.title()
         page_url = page.url
 
-        # Wait for listing cards
+        # --- Strategy 1: __NEXT_DATA__ (carsales uses Next.js) ---
         try:
-            page.wait_for_selector(
-                "[data-webm*='listing'], [class*='listing'], "
-                "[class*='card'], [class*='result']",
-                timeout=15000,
+            next_data_text = page.evaluate(
+                "() => { const el = document.getElementById('__NEXT_DATA__'); return el ? el.textContent : null; }"
             )
+            if next_data_text:
+                next_data = json.loads(next_data_text)
+                found = _search_json(next_data, scraped_at)
+                listings.extend(found)
         except Exception:
             pass
 
-        if debug:
-            page_text_snippet = page.inner_text("body")[:3000]
+        # --- Strategy 2: intercepted API JSON responses ---
+        if not listings:
+            for call in api_results:
+                found = _search_json(call["body"], scraped_at)
+                listings.extend(found)
 
-        # Strategy 1: parse intercepted API JSON
-        for call in api_results:
-            extracted = _parse_api_response(call["body"], scraped_at)
-            if extracted:
-                listings.extend(extracted)
+        # --- Strategy 3: all <script type="application/json"> tags ---
+        if not listings:
+            try:
+                scripts = page.query_selector_all(
+                    "script[type='application/json'], script[type='application/ld+json']"
+                )
+                for script in scripts:
+                    try:
+                        data = json.loads(script.inner_text())
+                        found = _search_json(data, scraped_at)
+                        listings.extend(found)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
-        # Strategy 2: DOM scrape
+        # --- Strategy 4: DOM card scraping ---
         if not listings:
             listings = _scrape_dom(page, scraped_at)
+
+        if debug:
+            page_html_snippet = page.content()[:4000]
 
         browser.close()
 
     # Deduplicate
-    seen = set()
+    seen: set = set()
     unique = []
     for l in listings:
         key = l.get("stock_no") or l.get("url") or l.get("title", "")
@@ -113,101 +226,13 @@ def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]
             "page_url": page_url,
             "api_calls_intercepted": len(api_results),
             "api_urls": [r["url"] for r in api_results],
-            "page_text_snippet": page_text_snippet,
+            "page_html_snippet": page_html_snippet,
         }
     return unique
 
 
-def _parse_api_response(body, scraped_at: str) -> list[dict]:
-    listings = []
-
-    # Unwrap common envelope shapes
-    if isinstance(body, dict):
-        for key in ["results", "data", "items", "listings", "vehicles", "content"]:
-            val = body.get(key)
-            if isinstance(val, list):
-                body = val
-                break
-            if isinstance(val, dict):
-                for k2 in ["results", "items", "listings", "vehicles"]:
-                    if isinstance(val.get(k2), list):
-                        body = val[k2]
-                        break
-
-    if not isinstance(body, list):
-        return []
-
-    for item in body:
-        if not isinstance(item, dict):
-            continue
-
-        def get(*keys):
-            for k in keys:
-                v = item.get(k)
-                if v is not None:
-                    return v
-                for sub in item.values():
-                    if isinstance(sub, dict):
-                        v = sub.get(k)
-                        if v is not None:
-                            return v
-            return None
-
-        title = str(get("title", "name", "description", "heading") or "")
-        title_lower = title.lower()
-
-        # Must mention A5
-        if "a5" not in title_lower:
-            continue
-
-        # Must be Avant / wagon
-        body_style = str(get("bodyStyle", "body_style", "bodyType", "style") or "").lower()
-        if body_style and "wagon" not in body_style and "avant" not in body_style:
-            # Fall back to checking title
-            if "avant" not in title_lower and "wagon" not in title_lower:
-                continue
-
-        # Must be petrol
-        fuel = str(get("fuelType", "fuel_type", "fuel", "fueltype") or "").lower()
-        if fuel and "petrol" not in fuel and "tfsi" not in fuel:
-            continue
-
-        # Must be demo or near-new
-        condition = str(get("condition", "vehicleCondition", "stockType") or "").lower()
-        if condition and not any(k in condition for k in ["demo", "near", "new"]):
-            continue
-
-        price_raw = get("price", "driveAwayPrice", "advertisedPrice", "priceValue", "retailPrice")
-        price = parse_price(price_raw)
-
-        odo_raw = get("odometer", "kilometres", "km", "mileage", "kms")
-        odo = parse_odometer(odo_raw)
-
-        url = str(get("url", "detailUrl", "listingUrl", "href", "link") or "")
-        if url and not url.startswith("http"):
-            url = "https://www.carsales.com.au" + url
-
-        listings.append({
-            "title": title,
-            "dealer": str(get("dealer", "dealerName", "sellerName", "seller") or "Audi Dealer"),
-            "suburb": str(get("suburb", "location", "city", "dealerSuburb") or ""),
-            "price": price,
-            "odometer": odo,
-            "colour": str(get("colour", "color", "exteriorColour", "exteriorColor") or ""),
-            "variant": str(get("variant", "badge", "grade", "trim", "series") or title),
-            "stock_no": str(get("stockNumber", "stockNo", "stock_no", "id", "listingId") or ""),
-            "vin": str(get("vin", "VIN") or ""),
-            "url": url,
-            "scraped_at": scraped_at,
-            "is_new": True,
-        })
-
-    return listings
-
-
 def _scrape_dom(page, scraped_at: str) -> list[dict]:
     listings = []
-
     card_selectors = [
         "[data-webm*='listing-item']",
         "[class*='listing-item']",
@@ -217,7 +242,6 @@ def _scrape_dom(page, scraped_at: str) -> list[dict]:
         "article[class*='card']",
         "article",
     ]
-
     cards = []
     for sel in card_selectors:
         try:
@@ -228,33 +252,15 @@ def _scrape_dom(page, scraped_at: str) -> list[dict]:
         except Exception:
             continue
 
-    if not cards:
-        # Try JSON embedded in script tags
-        try:
-            for script in page.query_selector_all("script[type='application/json'], script[type='application/ld+json']"):
-                try:
-                    data = json.loads(script.inner_text())
-                    parsed = _parse_api_response(data, scraped_at)
-                    if parsed:
-                        listings.extend(parsed)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return listings
-
     for card in cards:
         try:
             text = card.inner_text()
             if "a5" not in text.lower():
                 continue
-
             price_match = re.search(r"\$[\d,]+", text)
             price = parse_price(price_match.group()) if price_match else None
-
             odo_match = re.search(r"([\d,]+)\s*k(?:m|ms)\b", text, re.IGNORECASE)
             odo = parse_odometer(odo_match.group(1)) if odo_match else None
-
             url = ""
             try:
                 link = card.query_selector("a")
@@ -264,20 +270,9 @@ def _scrape_dom(page, scraped_at: str) -> list[dict]:
                         url = "https://www.carsales.com.au" + url
             except Exception:
                 pass
-
-            dealer = "Audi Dealer"
-            try:
-                for sel in ["[class*='dealer']", "[class*='seller']", "[class*='location']"]:
-                    el = card.query_selector(sel)
-                    if el:
-                        dealer = el.inner_text().strip()[:80]
-                        break
-            except Exception:
-                pass
-
             listings.append({
                 "title": text[:120].split("\n")[0].strip(),
-                "dealer": dealer,
+                "dealer": "Audi Dealer",
                 "suburb": "",
                 "price": price,
                 "odometer": odo,
