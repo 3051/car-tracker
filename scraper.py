@@ -41,6 +41,9 @@ def scrape_listings() -> list[dict]:
     filtered for A5 Avant Petrol Demo listings, wait for results to render,
     then extract and return structured listing data.
     """
+    import subprocess
+    subprocess.run(["playwright", "install", "chromium"], capture_output=True)
+
     from playwright.sync_api import sync_playwright
 
     listings = []
