@@ -77,72 +77,48 @@ def scrape_listings(debug: bool = False):
 
 
 def _parse_cards(soup: BeautifulSoup, scraped_at: str) -> list[dict]:
-    seen: set = set()
     listings = []
 
-    for link in soup.find_all("a", href=re.compile(r"stock/details", re.I)):
-        href = link.get("href", "")
-        if not href or href in seen:
-            continue
-
-        # Skip "Explore Vehicle" buttons — keep title/image links
-        link_text = link.get_text(strip=True).lower()
-        if "explore" in link_text or "save" in link_text:
-            continue
-
-        seen.add(href)
-
-        # Walk up to find the card container (has price + specs)
-        card = link
-        for _ in range(6):
-            parent = card.parent
-            if not parent:
-                break
-            parent_text = parent.get_text(separator=" ", strip=True)
-            if "$" in parent_text and "km" in parent_text.lower():
-                card = parent
-                break
-            card = parent
-
+    # Each listing is a div.stock-item with data-stockno and data-vin attributes
+    for card in soup.find_all("div", class_="stock-item"):
         card_text = card.get_text(separator=" ", strip=True)
 
-        # Filter: must mention A5
+        # Must mention A5
         if "a5" not in card_text.lower():
             continue
 
-        # Extract spec spans — format: Demo · 2,105 km · 7.4L/100km · Wagon · 2.0L Petrol
+        # Spec spans are inline elements — collect all non-empty span texts
         spans = [s.get_text(strip=True) for s in card.find_all("span") if s.get_text(strip=True)]
 
-        # Filter: must be Wagon/Avant
-        body_type = _find_span(spans, ["wagon", "avant"])
-        if not body_type:
+        # Must be Wagon/Avant body type
+        if not _find_span(spans, ["wagon", "avant"]):
             continue
 
-        # Filter: must be petrol (reject electric/hybrid)
-        fuel = _find_span(spans, ["petrol"])
-        if not fuel:
-            if _find_span(spans, ["electric", "hybrid", "e-tron"]):
-                continue
+        # Must be petrol (reject electric/hybrid)
+        if _find_span(spans, ["electric", "hybrid", "e-tron", "phev"]):
+            continue
 
-        # Title: prefer <h2>/<h3> in card, else first link text
-        title = ""
-        for tag in card.find_all(["h2", "h3", "h4", "strong"]):
-            t = tag.get_text(strip=True)
-            if "a5" in t.lower() and len(t) > 10:
-                title = t
-                break
-        if not title:
-            title = link.get("title") or link.get_text(strip=True) or card_text[:80]
+        # Title link has class "si-title"
+        title_link = card.find("a", class_="si-title")
+        href = title_link.get("href", "") if title_link else ""
+        title = (
+            title_link.get("title") or title_link.get_text(strip=True)
+            if title_link else card_text[:100]
+        )
 
-        # Dealer name
+        # Stock number and VIN from data attributes on the card div
+        stock_no = card.get("data-stockno", "")
+        vin = card.get("data-vin", "")
+
+        # Dealer — look for a dedicated element, fall back to "Zagame Audi"
         dealer = "Zagame Audi"
-        for cls_hint in ["dealer", "location", "branch", "showroom", "store"]:
+        for cls_hint in ["si-dealer", "dealer", "location", "branch", "showroom"]:
             el = card.find(class_=re.compile(cls_hint, re.I))
             if el:
                 dealer = el.get_text(strip=True)[:80]
                 break
 
-        # Colour from title
+        # Colour
         colour = ""
         colour_m = re.search(
             r"\b(white|black|grey|gray|silver|blue|red|green|brown|yellow|orange|"
@@ -153,7 +129,6 @@ def _parse_cards(soup: BeautifulSoup, scraped_at: str) -> list[dict]:
             colour = colour_m.group(0).title()
 
         full_url = BASE_URL + href if href.startswith("/") else href
-        stock_m = re.search(r"OAG-AD-\d+", href)
 
         listings.append({
             "title": title,
@@ -163,8 +138,8 @@ def _parse_cards(soup: BeautifulSoup, scraped_at: str) -> list[dict]:
             "odometer": parse_odometer(card_text),
             "colour": colour,
             "variant": title,
-            "stock_no": stock_m.group(0) if stock_m else "",
-            "vin": "",
+            "stock_no": stock_no,
+            "vin": vin,
             "url": full_url,
             "scraped_at": scraped_at,
             "is_new": True,
