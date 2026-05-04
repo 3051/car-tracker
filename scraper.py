@@ -35,11 +35,13 @@ def parse_odometer(text: str) -> Optional[int]:
     return int(digits) if digits else None
 
 
-def scrape_listings() -> list[dict]:
+def scrape_listings(debug: bool = False) -> list[dict] | tuple[list[dict], dict]:
     """
     Launch a headless Chromium browser, navigate to the Audi AU used car search
     filtered for A5 Avant Petrol Demo listings, wait for results to render,
     then extract and return structured listing data.
+
+    If debug=True, returns (listings, debug_info) instead of just listings.
     """
     import subprocess
     subprocess.run(["playwright", "install", "chromium"], capture_output=True)
@@ -62,13 +64,13 @@ def scrape_listings() -> list[dict]:
         )
         page = context.new_page()
 
-        # Intercept JSON API responses — Audi's SPA calls a backend API
+        # Intercept ALL JSON API responses (broadened from keyword filter)
         api_results = []
 
         def handle_response(response):
             url = response.url
             ct = response.headers.get("content-type", "")
-            if "json" in ct and any(k in url for k in ["vehicle", "search", "stock", "api", "inventory"]):
+            if "json" in ct:
                 try:
                     body = response.json()
                     api_results.append({"url": url, "body": body})
@@ -80,9 +82,11 @@ def scrape_listings() -> list[dict]:
         # Navigate and wait for listing cards to appear
         page.goto(SEARCH_URL, wait_until="networkidle", timeout=45000)
 
+        page_title = page.title()
+        page_url = page.url
+
         # Give the SPA extra time to render
         try:
-            # Try waiting for a typical result card selector
             page.wait_for_selector(
                 "[class*='result'], [class*='listing'], [class*='vehicle-card'], "
                 "[class*='car-tile'], [class*='search-result']",
@@ -90,6 +94,8 @@ def scrape_listings() -> list[dict]:
             )
         except Exception:
             pass
+
+        page_text_snippet = page.inner_text("body")[:2000] if debug else ""
 
         # --- Strategy 1: Parse intercepted API JSON responses ---
         for api_call in api_results:
@@ -112,6 +118,16 @@ def scrape_listings() -> list[dict]:
         if key and key not in seen:
             seen.add(key)
             unique.append(l)
+
+    if debug:
+        debug_info = {
+            "page_title": page_title,
+            "page_url": page_url,
+            "api_calls_intercepted": len(api_results),
+            "api_urls": [r["url"] for r in api_results],
+            "page_text_snippet": page_text_snippet,
+        }
+        return unique, debug_info
 
     return unique
 

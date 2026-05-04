@@ -59,13 +59,26 @@ with col_btn:
     if st.button("🔄 Refresh listings now", use_container_width=True):
         with st.spinner("Scraping audi.com.au..."):
             try:
-                listings = scrape_listings()
+                listings, debug_info = scrape_listings(debug=True)
                 if listings:
                     save_listings(listings)
                     st.success(f"✅ Found {len(listings)} listing(s). Saved.")
                     st.rerun()
                 else:
                     st.warning("No A5 Avant petrol demo listings found on audi.com.au right now.")
+                    with st.expander("🔍 Debug info"):
+                        st.write(f"**Page title:** {debug_info['page_title']}")
+                        st.write(f"**Final URL:** {debug_info['page_url']}")
+                        st.write(f"**JSON API calls intercepted:** {debug_info['api_calls_intercepted']}")
+                        if debug_info["api_urls"]:
+                            st.write("**API URLs hit:**")
+                            for u in debug_info["api_urls"]:
+                                st.code(u)
+                        else:
+                            st.write("No JSON API calls were intercepted.")
+                        if debug_info["page_text_snippet"]:
+                            st.write("**Page text (first 2000 chars):**")
+                            st.text(debug_info["page_text_snippet"])
             except Exception as e:
                 st.error(f"Scrape failed: {e}")
 
