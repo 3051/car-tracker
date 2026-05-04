@@ -57,7 +57,7 @@ with col_title:
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 Refresh listings now", use_container_width=True):
-        with st.spinner("Scraping audi.com.au..."):
+        with st.spinner("Scraping zag.com.au..."):
             try:
                 listings, debug_info = scrape_listings(debug=True)
                 if listings:
@@ -65,20 +65,16 @@ with col_btn:
                     st.success(f"✅ Found {len(listings)} listing(s). Saved.")
                     st.rerun()
                 else:
-                    st.warning("No A5 Avant petrol demo listings found on audi.com.au right now.")
+                    st.warning("No A5 Avant petrol demo listings found right now.")
                     with st.expander("🔍 Debug info"):
-                        st.write(f"**Page title:** {debug_info['page_title']}")
-                        st.write(f"**Final URL:** {debug_info['page_url']}")
-                        st.write(f"**JSON API calls intercepted:** {debug_info['api_calls_intercepted']}")
-                        if debug_info["api_urls"]:
-                            st.write("**API URLs hit:**")
-                            for u in debug_info["api_urls"]:
-                                st.code(u)
-                        else:
-                            st.write("No JSON API calls were intercepted.")
-                        if debug_info.get("page_html_snippet"):
-                            st.write("**Page HTML (first 4000 chars):**")
-                            st.code(debug_info["page_html_snippet"], language="html")
+                        st.write(f"**Status:** {debug_info.get('status_code')}")
+                        st.write(f"**Page title:** {debug_info.get('page_title')}")
+                        st.write(f"**Final URL:** {debug_info.get('final_url')}")
+                        st.write(f"**Raw A5 cards found:** {debug_info.get('raw_cards_found')}")
+                        st.write(f"**After Avant/petrol filter:** {debug_info.get('listings_after_filter')}")
+                        if debug_info.get("html_snippet"):
+                            st.write("**Page HTML (first 3000 chars):**")
+                            st.code(debug_info["html_snippet"], language="html")
             except Exception as e:
                 st.error(f"Scrape failed: {e}")
 
