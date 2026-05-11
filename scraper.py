@@ -61,7 +61,7 @@ _WHERE = {
 
 
 def scrape_listings(debug: bool = False):
-    scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     payload = {
         "operationName": "GET_MARKETPLACE_LISTINGS_DYNAMIC",
@@ -105,7 +105,7 @@ def scrape_listings(debug: bool = False):
             "variant": variant,
             "stock_no": str(listing_id),
             "vin": "",
-            "url": f"https://www.drive.com.au/cars-for-sale/{listing_id}/",
+            "url": f"https://www.drive.com.au/cars-for-sale/car/{listing_id}/",
             "scraped_at": scraped_at,
             "is_new": True,
             "condition": condition,

@@ -56,7 +56,7 @@ def save_listings(listings: list[dict]):
     if not listings:
         return
 
-    scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Get previously seen VINs / stock numbers to detect new listings
     with _conn() as con:
