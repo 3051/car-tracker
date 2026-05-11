@@ -207,14 +207,15 @@ st.markdown("### Current listings")
 scraped_at = df["scraped_at"].iloc[0] if "scraped_at" in df.columns else "—"
 st.caption(f"Last scraped: {scraped_at}")
 
+listing_ids = tuple(df["stock_no"].dropna().astype(str).tolist())
+with st.spinner("Loading price history…"):
+    ph = fetch_price_history(listing_ids)
+
 tab_list, tab_map = st.tabs(["List", "Map"])
 
 min_price = prices.min() if len(prices) else None
 
 with tab_list:
-    listing_ids = tuple(df["stock_no"].dropna().astype(str).tolist())
-    with st.spinner("Loading price history…"):
-        ph = fetch_price_history(listing_ids)
 
     for _, row in df.sort_values("price").iterrows():
         is_best = row.get("price") == min_price
@@ -291,6 +292,11 @@ with tab_map:
             odo_str = f"{int(sel_row['odometer']):,} km" if pd.notna(sel_row.get("odometer")) else "—"
             cond = sel_row.get("condition", "Demo")
             link_html = f'<a href="{sel_row["url"]}" target="_blank">View on drive.com.au ↗</a>' if sel_row.get("url") else ""
+            sel_history = ph.get(str(sel_row.get("stock_no", "")))
+            sel_spark_pts = [(pt["price"], pt["date"]) for pt in (sel_history or []) if pt.get("price")]
+            sel_spark_html = ""
+            if len(sel_spark_pts) >= 2:
+                sel_spark_html = '<div style="margin-top:10px;border-top:1px solid #2a2a2a;padding-top:8px;">' + make_sparkline([p for p, _ in sel_spark_pts], [d for _, d in sel_spark_pts]) + '</div>'
             st.markdown(f"""
             <div class="listing-card" style="margin-top:12px;">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
@@ -306,6 +312,7 @@ with tab_map:
                         <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.05em">drive away</div>
                     </div>
                 </div>
+                {sel_spark_html}
             </div>
             """, unsafe_allow_html=True)
 
