@@ -15,12 +15,13 @@ def geocode_suburbs(suburbs: tuple[str, ...]) -> dict[str, tuple[float, float]]:
                 continue
             try:
                 r = client.get(
-                    "https://nominatim.openstreetmap.org/search",
-                    params={"q": f"{suburb}, Victoria, Australia", "format": "json", "limit": 1},
+                    "https://photon.komoot.io/api/",
+                    params={"q": f"{suburb} Victoria Australia", "limit": 1, "lang": "en"},
                 )
-                hits = r.json()
-                if hits:
-                    coords[suburb] = (float(hits[0]["lat"]), float(hits[0]["lon"]))
+                features = r.json().get("features", [])
+                if features:
+                    lon, lat = features[0]["geometry"]["coordinates"]
+                    coords[suburb] = (float(lat), float(lon))
             except Exception:
                 pass
     return coords
