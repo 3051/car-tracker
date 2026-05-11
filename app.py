@@ -54,12 +54,12 @@ init_db()
 col_title, col_btn = st.columns([3, 1])
 with col_title:
     st.markdown("## 🔴 Audi A5 Avant — Demo &amp; Used Petrol Tracker")
-    st.caption("Victoria · Sourced from zag.com.au · A5 Avant · Petrol · Demo &amp; Used")
+    st.caption("Victoria · Sourced from drive.com.au · A5 Avant · TFSI Petrol · Demo &amp; Used")
 
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 Refresh listings now", use_container_width=True):
-        with st.spinner("Scraping zag.com.au..."):
+        with st.spinner("Scraping drive.com.au..."):
             try:
                 listings, debug_info = scrape_listings(debug=True)
                 if listings:
@@ -69,22 +69,11 @@ with col_btn:
                 else:
                     st.warning("No A5 Avant petrol listings found right now.")
                     with st.expander("🔍 Debug info"):
-                        lines = []
-                        for condition, info in debug_info.items():
-                            lines += [
-                                f"=== {condition} ===",
-                                f"status:              {info.get('status_code')}",
-                                f"html_length:         {info.get('html_length')}",
-                                f"total_detail_links:  {info.get('total_detail_links')}",
-                                f"listings_found:      {info.get('listings_after_filter')}",
-                                "",
-                                "--- sample detail links ---",
-                                "\n".join(info.get("sample_detail_links") or ["(none)"]),
-                                "",
-                                "--- html snippet ---",
-                                info.get("html_snippet") or "(empty)",
-                                "",
-                            ]
+                        lines = [
+                            f"status:            {debug_info.get('status_code')}",
+                            f"total_from_api:    {debug_info.get('total_from_api')}",
+                            f"listings_found:    {debug_info.get('listings_after_filter')}",
+                        ]
                         st.code("\n".join(lines))
             except Exception as e:
                 st.error(f"Scrape failed: {e}")
@@ -96,11 +85,11 @@ latest = get_latest_listings()
 history = load_history()
 
 if not latest:
-    st.info("👆 Click **Refresh listings now** to scrape zag.com.au for current A5 Avant petrol demo &amp; used stock.")
+    st.info("👆 Click **Refresh listings now** to scrape drive.com.au for current A5 Avant TFSI petrol demo &amp; used stock in VIC.")
     st.markdown("""
     **What this app does:**
-    - Hits the Zagame Automotive stock API (zag.com.au) directly — no browser needed
-    - Filters for: A5 Avant · Petrol · Demo and Used
+    - Queries the drive.com.au GraphQL API — no browser needed
+    - Filters for: A5 Avant · TFSI Petrol · Demo and Used · Victoria · All dealers
     - Saves every snapshot so you can track price changes over time
     - Alerts you when new listings appear or prices drop
     """)
@@ -161,15 +150,15 @@ if history and len(history) > len(df):
     hist_df["scraped_at"] = pd.to_datetime(hist_df["scraped_at"])
 
     st.markdown("### Price history")
-    if "vin" in hist_df.columns and hist_df["vin"].notna().any():
+    if "stock_no" in hist_df.columns and hist_df["stock_no"].notna().any():
         fig2 = px.line(
             hist_df.dropna(subset=["price"]),
             x="scraped_at",
             y="price",
-            color="vin",
+            color="stock_no",
             markers=True,
-            labels={"scraped_at": "Date", "price": "Price ($)", "vin": "VIN"},
-            title="Price over time (per vehicle)",
+            labels={"scraped_at": "Date", "price": "Price ($)", "stock_no": "Listing"},
+            title="Price over time (per listing)",
         )
     else:
         agg = hist_df.groupby("scraped_at")["price"].agg(["min", "mean", "max"]).reset_index()
@@ -200,7 +189,7 @@ for _, row in df.sort_values("price").iterrows():
     new_badge = '<span class="badge badge-new">New</span>' if row.get("is_new") else ""
     cond = row.get("condition", "Demo")
     cond_badge = f'<span class="badge badge-{"used" if cond == "Used" else "demo"}">{cond}</span>'
-    link_html = f'<a href="{row["url"]}" target="_blank">View on audi.com.au ↗</a>' if row.get("url") else ""
+    link_html = f'<a href="{row["url"]}" target="_blank">View on drive.com.au ↗</a>' if row.get("url") else ""
     price_str = f"${row['price']:,.0f}" if pd.notna(row.get("price")) else "POA"
     odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
 
@@ -233,7 +222,7 @@ with st.expander("📊 Raw data / export"):
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     st.markdown("**Search filters** (read-only — hardcoded for accuracy)")
-    st.code("Model: A5\nBody: Avant (Wagon)\nFuel: Petrol\nCondition: Demo + Used\nSource: zag.com.au", language=None)
+    st.code("Model: A5\nBody: Avant (Wagon)\nFuel: TFSI Petrol\nCondition: Demo + Used\nState: VIC\nSource: drive.com.au", language=None)
 
     st.divider()
     st.markdown("### 📅 Scrape history")
@@ -246,4 +235,4 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ℹ️ About")
-    st.caption("Scrapes [zag.com.au](https://www.zag.com.au) stock API via httpx. Deploy free on [Streamlit Cloud](https://streamlit.io/cloud) or [Railway](https://railway.app).")
+    st.caption("Queries [drive.com.au](https://www.drive.com.au) GraphQL API via httpx. Deploy free on [Streamlit Cloud](https://streamlit.io/cloud) or [Railway](https://railway.app).")

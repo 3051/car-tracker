@@ -10,7 +10,7 @@ def main():
     print("Initialising database...")
     init_db()
 
-    print("Scraping audi.com.au for A5 Avant petrol demo listings...")
+    print("Scraping drive.com.au for A5 Avant TFSI petrol listings in VIC...")
     try:
         listings = scrape_listings()
     except Exception as e:
