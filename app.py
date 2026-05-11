@@ -171,36 +171,7 @@ for col, label, val in [
         </div>
         """, unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
 
-# --- Chart: price bar ---
-if len(df) >= 2:
-    min_price = prices.min()
-    fig = px.bar(
-        df.sort_values("price"),
-        x="dealer",
-        y="price",
-        color="price",
-        color_continuous_scale=[[0, "#1D9E75"], [0.3, "#BB0A21"], [1, "#660010"]],
-        text="price",
-        labels={"dealer": "Dealer", "price": "Drive-away Price ($)"},
-        title="Drive-away price by dealer",
-    )
-    fig.update_traces(
-        texttemplate="$%{text:,.0f}",
-        textposition="outside",
-    )
-    fig.update_layout(
-        plot_bgcolor="#1a1a1a",
-        paper_bgcolor="#0f0f0f",
-        font_color="#f0f0f0",
-        coloraxis_showscale=False,
-        margin=dict(t=40, b=20),
-        xaxis_tickangle=-20,
-        height=320,
-        yaxis=dict(showgrid=True, gridcolor="#2a2a2a", tickprefix="$", tickformat=","),
-    )
-    st.plotly_chart(fig, use_container_width=True)
 
 # --- Listings: Map / List tabs ---
 st.markdown("### Current listings")
