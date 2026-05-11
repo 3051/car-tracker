@@ -220,10 +220,7 @@ with tab_list:
         spark_prices = [pt["price"] for pt in (history or []) if pt.get("price")]
         spark_html = ""
         if len(spark_prices) >= 2:
-            spark_html = f"""
-            <div style="margin-top:10px; border-top:1px solid #2a2a2a; padding-top:8px;">
-                {make_sparkline(spark_prices)}
-            </div>"""
+            spark_html = '<div style="margin-top:10px;border-top:1px solid #2a2a2a;padding-top:8px;">' + make_sparkline(spark_prices) + '</div>'
 
         st.markdown(f"""
         <div class="{card_class}">
