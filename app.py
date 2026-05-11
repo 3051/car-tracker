@@ -195,7 +195,8 @@ with tab_list:
         new_badge = '<span class="badge badge-new">New</span>' if row.get("is_new") else ""
         cond = row.get("condition", "Demo")
         cond_badge = f'<span class="badge badge-{"used" if cond == "Used" else "demo"}">{cond}</span>'
-        link_html = f'<a href="{row["url"]}" target="_blank">View on drive.com.au ↗</a>' if row.get("url") else ""
+        listing_url = f"https://www.drive.com.au/cars-for-sale/car/{row['stock_no']}/" if row.get("stock_no") else row.get("url", "")
+        link_html = f'<a href="{listing_url}" target="_blank">View on drive.com.au ↗</a>' if listing_url else ""
         price_str = f"${row['price']:,.0f}" if pd.notna(row.get("price")) else "POA"
         odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
 
@@ -262,7 +263,8 @@ with tab_map:
             price_str = f"${sel_row['price']:,.0f}" if pd.notna(sel_row.get("price")) else "POA"
             odo_str = f"{int(sel_row['odometer']):,} km" if pd.notna(sel_row.get("odometer")) else "—"
             cond = sel_row.get("condition", "Demo")
-            link_html = f'<a href="{sel_row["url"]}" target="_blank">View on drive.com.au ↗</a>' if sel_row.get("url") else ""
+            sel_url = f"https://www.drive.com.au/cars-for-sale/car/{sel_row['stock_no']}/" if sel_row.get("stock_no") else sel_row.get("url", "")
+            link_html = f'<a href="{sel_url}" target="_blank">View on drive.com.au ↗</a>' if sel_url else ""
             sel_history = ph.get(str(sel_row.get("stock_no", "")))
             sel_spark_pts = [(pt["price"], pt["date"]) for pt in (sel_history or []) if pt.get("price")]
             sel_spark_html = ""
