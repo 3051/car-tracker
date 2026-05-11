@@ -32,6 +32,28 @@ def fetch_price_history(listing_ids: tuple[str, ...]) -> dict[str, list[dict]]:
     return get_price_history(list(listing_ids))
 
 
+def make_sparkline(prices: list[float], width: int = 300, height: int = 52) -> str:
+    if len(prices) < 2:
+        return ""
+    lo, hi = min(prices), max(prices)
+    if hi == lo:
+        hi = lo + 1
+    def sx(i: int) -> float:
+        return i / (len(prices) - 1) * width
+    def sy(p: float) -> float:
+        return height - 4 - (p - lo) / (hi - lo) * (height - 8)
+    pts = " ".join(f"{sx(i):.1f},{sy(p):.1f}" for i, p in enumerate(prices))
+    area = f"0,{height} {pts} {width},{height}"
+    return (
+        f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" '
+        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">'
+        f'<polygon points="{area}" fill="#BB0A21" fill-opacity="0.15"/>'
+        f'<polyline points="{pts}" fill="none" stroke="#BB0A21" stroke-width="2" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'</svg>'
+    )
+
+
 st.set_page_config(
     page_title="Audi A5 Avant Tracker",
     page_icon="🚗",
@@ -194,44 +216,33 @@ with tab_list:
         price_str = f"${row['price']:,.0f}" if pd.notna(row.get("price")) else "POA"
         odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
 
-        col_card, col_chart = st.columns([3, 2])
-        with col_card:
-            st.markdown(f"""
-            <div class="{card_class}">
-                <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
-                    <div>
-                        <strong style="font-size:15px">{row.get('dealer','Unknown dealer')}</strong>
-                        {cond_badge} {best_badge} {new_badge}
-                        <div style="font-size:12px; color:#888; margin-top:4px">{row.get('suburb','')} · {row.get('variant','A5 Avant TFSI Petrol')}</div>
-                        <div style="font-size:12px; color:#888">{odo_str} · Auto</div>
-                        {f'<div style="font-size:12px; margin-top:4px">{link_html}</div>' if link_html else ''}
-                    </div>
-                    <div style="text-align:right">
-                        <div style="font-size:24px; font-weight:600; font-family:monospace; color:{'#1D9E75' if is_best else '#f0f0f0'}">{price_str}</div>
-                        <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.05em">drive away</div>
-                    </div>
+        history = ph.get(str(row.get("stock_no", "")))
+        spark_prices = [pt["price"] for pt in (history or []) if pt.get("price")]
+        spark_html = ""
+        if len(spark_prices) >= 2:
+            spark_html = f"""
+            <div style="margin-top:10px; border-top:1px solid #2a2a2a; padding-top:8px;">
+                {make_sparkline(spark_prices)}
+            </div>"""
+
+        st.markdown(f"""
+        <div class="{card_class}">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
+                <div>
+                    <strong style="font-size:15px">{row.get('dealer','Unknown dealer')}</strong>
+                    {cond_badge} {best_badge} {new_badge}
+                    <div style="font-size:12px; color:#888; margin-top:4px">{row.get('suburb','')} · {row.get('variant','A5 Avant TFSI Petrol')}</div>
+                    <div style="font-size:12px; color:#888">{odo_str} · Auto</div>
+                    {f'<div style="font-size:12px; margin-top:4px">{link_html}</div>' if link_html else ''}
+                </div>
+                <div style="text-align:right">
+                    <div style="font-size:24px; font-weight:600; font-family:monospace; color:{'#1D9E75' if is_best else '#f0f0f0'}">{price_str}</div>
+                    <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.05em">drive away</div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
-        with col_chart:
-            history = ph.get(str(row.get("stock_no", "")))
-            if history and len(history) >= 2:
-                h_df = pd.DataFrame(history)
-                h_df["date"] = pd.to_datetime(h_df["date"])
-                fig_mini = px.bar(h_df, x="date", y="price")
-                fig_mini.update_traces(marker_color="#BB0A21")
-                fig_mini.update_layout(
-                    plot_bgcolor="#1a1a1a", paper_bgcolor="#1a1a1a",
-                    font_color="#f0f0f0",
-                    margin=dict(t=8, b=8, l=8, r=8),
-                    height=140,
-                    showlegend=False,
-                    xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=9), tickformat="%b %d"),
-                    yaxis=dict(showgrid=False, zeroline=False, tickprefix="$", tickformat=",", tickfont=dict(size=9)),
-                )
-                st.plotly_chart(fig_mini, use_container_width=True, config={"displayModeBar": False})
-            else:
-                st.markdown('<div style="height:140px"></div>', unsafe_allow_html=True)
+            {spark_html}
+        </div>
+        """, unsafe_allow_html=True)
 
 with tab_map:
     suburbs = tuple(df["suburb"].dropna().unique().tolist())
@@ -249,7 +260,7 @@ with tab_map:
             map_df,
             lat="lat", lon="lon",
             hover_name="dealer",
-            hover_data={"price_str": True, "suburb": True, "lat": False, "lon": False},
+            hover_data={"price_str": True, "suburb": True, "price": False, "lat": False, "lon": False},
             color="price",
             color_continuous_scale=[[0, "#1D9E75"], [0.5, "#BB0A21"], [1, "#660010"]],
             size=[18] * len(map_df),
