@@ -261,13 +261,12 @@ with tab_map:
             hover_data={"price_str": True, "suburb": True, "price": False, "lat": False, "lon": False},
             color="price",
             color_continuous_scale=[[0, "#1D9E75"], [0.5, "#BB0A21"], [1, "#660010"]],
-            size=[18] * len(map_df),
-            size_max=18,
             mapbox_style="open-street-map",
             zoom=8,
             center={"lat": -37.85, "lon": 145.05},
             labels={"price_str": "Price", "suburb": "Suburb"},
         )
+        fig_map.update_traces(marker_size=14)
         fig_map.update_layout(
             paper_bgcolor="#0f0f0f", font_color="#f0f0f0",
             margin=dict(t=0, b=0, l=0, r=0), height=480,
