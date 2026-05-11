@@ -169,40 +169,6 @@ if len(df) >= 2:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# --- Price trend (sourced from drive.com.au API history) ---
-st.markdown("### Price trend")
-listing_ids = tuple(df["stock_no"].dropna().astype(str).tolist())
-with st.spinner("Loading price history…"):
-    ph = fetch_price_history(listing_ids)
-
-if ph:
-    rows_trend = []
-    for lid, timeline in ph.items():
-        for pt in timeline:
-            rows_trend.append({"date": pt["date"], "price": pt["price"], "dealer": pt["dealer"], "id": lid})
-    trend_df = pd.DataFrame(rows_trend)
-    trend_df["date"] = pd.to_datetime(trend_df["date"])
-    # Short label: dealer name without trailing location tags + last 4 digits of ID
-    trend_df["label"] = trend_df["dealer"].str.replace(r"\s*[-–]\s*(New|Demo|Used|New & Demo).*", "", regex=True) \
-                        + " #" + trend_df["id"].str[-4:]
-
-    fig_trend = px.line(
-        trend_df.sort_values("date"),
-        x="date", y="price", color="label", markers=True,
-        labels={"date": "", "price": "Drive-away ($)", "label": "Listing"},
-        color_discrete_sequence=px.colors.qualitative.Set2,
-    )
-    fig_trend.update_layout(
-        plot_bgcolor="#1a1a1a", paper_bgcolor="#0f0f0f", font_color="#f0f0f0",
-        margin=dict(t=10, b=10), height=320,
-        legend=dict(orientation="h", y=-0.25, font=dict(size=10)),
-        yaxis=dict(tickprefix="$", tickformat=","),
-        hovermode="x unified",
-    )
-    st.plotly_chart(fig_trend, use_container_width=True)
-else:
-    st.caption("Price history unavailable — will appear after the first scrape completes.")
-
 # --- Listings: Map / List tabs ---
 st.markdown("### Current listings")
 scraped_at = df["scraped_at"].iloc[0] if "scraped_at" in df.columns else "—"
@@ -213,6 +179,10 @@ tab_list, tab_map = st.tabs(["List", "Map"])
 min_price = prices.min() if len(prices) else None
 
 with tab_list:
+    listing_ids = tuple(df["stock_no"].dropna().astype(str).tolist())
+    with st.spinner("Loading price history…"):
+        ph = fetch_price_history(listing_ids)
+
     for _, row in df.sort_values("price").iterrows():
         is_best = row.get("price") == min_price
         card_class = "listing-card best" if is_best else "listing-card"
@@ -224,23 +194,44 @@ with tab_list:
         price_str = f"${row['price']:,.0f}" if pd.notna(row.get("price")) else "POA"
         odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
 
-        st.markdown(f"""
-        <div class="{card_class}">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
-                <div>
-                    <strong style="font-size:15px">{row.get('dealer','Unknown dealer')}</strong>
-                    {cond_badge} {best_badge} {new_badge}
-                    <div style="font-size:12px; color:#888; margin-top:4px">{row.get('suburb','')} · {row.get('variant','A5 Avant TFSI Petrol')}</div>
-                    <div style="font-size:12px; color:#888">{odo_str} · Auto</div>
-                    {f'<div style="font-size:12px; margin-top:4px">{link_html}</div>' if link_html else ''}
-                </div>
-                <div style="text-align:right">
-                    <div style="font-size:24px; font-weight:600; font-family:monospace; color:{'#1D9E75' if is_best else '#f0f0f0'}">{price_str}</div>
-                    <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.05em">drive away</div>
+        col_card, col_chart = st.columns([3, 2])
+        with col_card:
+            st.markdown(f"""
+            <div class="{card_class}">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
+                    <div>
+                        <strong style="font-size:15px">{row.get('dealer','Unknown dealer')}</strong>
+                        {cond_badge} {best_badge} {new_badge}
+                        <div style="font-size:12px; color:#888; margin-top:4px">{row.get('suburb','')} · {row.get('variant','A5 Avant TFSI Petrol')}</div>
+                        <div style="font-size:12px; color:#888">{odo_str} · Auto</div>
+                        {f'<div style="font-size:12px; margin-top:4px">{link_html}</div>' if link_html else ''}
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:24px; font-weight:600; font-family:monospace; color:{'#1D9E75' if is_best else '#f0f0f0'}">{price_str}</div>
+                        <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.05em">drive away</div>
+                    </div>
                 </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+        with col_chart:
+            history = ph.get(str(row.get("stock_no", "")))
+            if history and len(history) >= 2:
+                h_df = pd.DataFrame(history)
+                h_df["date"] = pd.to_datetime(h_df["date"])
+                fig_mini = px.bar(h_df, x="date", y="price")
+                fig_mini.update_traces(marker_color="#BB0A21")
+                fig_mini.update_layout(
+                    plot_bgcolor="#1a1a1a", paper_bgcolor="#1a1a1a",
+                    font_color="#f0f0f0",
+                    margin=dict(t=8, b=8, l=8, r=8),
+                    height=140,
+                    showlegend=False,
+                    xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=9), tickformat="%b %d"),
+                    yaxis=dict(showgrid=False, zeroline=False, tickprefix="$", tickformat=",", tickfont=dict(size=9)),
+                )
+                st.plotly_chart(fig_mini, use_container_width=True, config={"displayModeBar": False})
+            else:
+                st.markdown('<div style="height:140px"></div>', unsafe_allow_html=True)
 
 with tab_map:
     suburbs = tuple(df["suburb"].dropna().unique().tolist())
