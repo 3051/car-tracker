@@ -2,10 +2,34 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
-import json
-from scraper import scrape_listings
+import httpx
+from scraper import scrape_listings, get_price_history
 from database import init_db, save_listings, load_history, get_latest_listings, get_all_snapshots
+
+@st.cache_data(ttl=86400)
+def geocode_suburbs(suburbs: tuple[str, ...]) -> dict[str, tuple[float, float]]:
+    coords: dict[str, tuple[float, float]] = {}
+    with httpx.Client(timeout=10, headers={"User-Agent": "audi-a5-tracker/1.0"}) as client:
+        for suburb in suburbs:
+            if not suburb or suburb in coords:
+                continue
+            try:
+                r = client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": f"{suburb}, Victoria, Australia", "format": "json", "limit": 1},
+                )
+                hits = r.json()
+                if hits:
+                    coords[suburb] = (float(hits[0]["lat"]), float(hits[0]["lon"]))
+            except Exception:
+                pass
+    return coords
+
+
+@st.cache_data(ttl=3600)
+def fetch_price_history(listing_ids: tuple[str, ...]) -> dict[str, list[dict]]:
+    return get_price_history(list(listing_ids))
+
 
 st.set_page_config(
     page_title="Audi A5 Avant Tracker",
@@ -144,73 +168,111 @@ if len(df) >= 2:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# --- Price history chart ---
-if history and len(history) > len(df):
-    hist_df = pd.DataFrame(history)
-    hist_df["scraped_at"] = pd.to_datetime(hist_df["scraped_at"])
+# --- Price trend (sourced from drive.com.au API history) ---
+st.markdown("### Price trend")
+listing_ids = tuple(df["stock_no"].dropna().astype(str).tolist())
+with st.spinner("Loading price history…"):
+    ph = fetch_price_history(listing_ids)
 
-    st.markdown("### Price history")
-    if "stock_no" in hist_df.columns and hist_df["stock_no"].notna().any():
-        fig2 = px.line(
-            hist_df.dropna(subset=["price"]),
-            x="scraped_at",
-            y="price",
-            color="stock_no",
-            markers=True,
-            labels={"scraped_at": "Date", "price": "Price ($)", "stock_no": "Listing"},
-            title="Price over time (per listing)",
-        )
-    else:
-        agg = hist_df.groupby("scraped_at")["price"].agg(["min", "mean", "max"]).reset_index()
-        fig2 = go.Figure()
-        for col, name, color in [("min", "Lowest", "#1D9E75"), ("mean", "Average", "#4da6ff"), ("max", "Highest", "#BB0A21")]:
-            fig2.add_trace(go.Scatter(x=agg["scraped_at"], y=agg[col], name=name, line=dict(color=color), mode="lines+markers"))
-        fig2.update_layout(title="Price range over time")
+if ph:
+    rows_trend = []
+    for lid, timeline in ph.items():
+        for pt in timeline:
+            rows_trend.append({"date": pt["date"], "price": pt["price"], "dealer": pt["dealer"], "id": lid})
+    trend_df = pd.DataFrame(rows_trend)
+    trend_df["date"] = pd.to_datetime(trend_df["date"])
+    # Short label: dealer name without trailing location tags + last 4 digits of ID
+    trend_df["label"] = trend_df["dealer"].str.replace(r"\s*[-–]\s*(New|Demo|Used|New & Demo).*", "", regex=True) \
+                        + " #" + trend_df["id"].str[-4:]
 
-    fig2.update_layout(
-        plot_bgcolor="#1a1a1a",
-        paper_bgcolor="#0f0f0f",
-        font_color="#f0f0f0",
-        margin=dict(t=40, b=20),
-        height=300,
+    fig_trend = px.line(
+        trend_df.sort_values("date"),
+        x="date", y="price", color="label", markers=True,
+        labels={"date": "", "price": "Drive-away ($)", "label": "Listing"},
+        color_discrete_sequence=px.colors.qualitative.Set2,
     )
-    st.plotly_chart(fig2, use_container_width=True)
+    fig_trend.update_layout(
+        plot_bgcolor="#1a1a1a", paper_bgcolor="#0f0f0f", font_color="#f0f0f0",
+        margin=dict(t=10, b=10), height=320,
+        legend=dict(orientation="h", y=-0.25, font=dict(size=10)),
+        yaxis=dict(tickprefix="$", tickformat=","),
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
+else:
+    st.caption("Price history unavailable — will appear after the first scrape completes.")
 
-# --- Listing cards ---
+# --- Listings: Map / List tabs ---
 st.markdown("### Current listings")
 scraped_at = df["scraped_at"].iloc[0] if "scraped_at" in df.columns else "—"
 st.caption(f"Last scraped: {scraped_at}")
 
-min_price = prices.min() if len(prices) else None
-for _, row in df.sort_values("price").iterrows():
-    is_best = row.get("price") == min_price
-    card_class = "listing-card best" if is_best else "listing-card"
-    best_badge = '<span class="badge badge-best">Lowest price</span>' if is_best else ""
-    new_badge = '<span class="badge badge-new">New</span>' if row.get("is_new") else ""
-    cond = row.get("condition", "Demo")
-    cond_badge = f'<span class="badge badge-{"used" if cond == "Used" else "demo"}">{cond}</span>'
-    link_html = f'<a href="{row["url"]}" target="_blank">View on drive.com.au ↗</a>' if row.get("url") else ""
-    price_str = f"${row['price']:,.0f}" if pd.notna(row.get("price")) else "POA"
-    odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
+tab_list, tab_map = st.tabs(["List", "Map"])
 
-    st.markdown(f"""
-    <div class="{card_class}">
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
-            <div>
-                <strong style="font-size:15px">{row.get('dealer','Unknown dealer')}</strong>
-                {cond_badge} {best_badge} {new_badge}
-                <div style="font-size:12px; color:#888; margin-top:4px">{row.get('suburb','')} · {row.get('variant','A5 Avant TFSI Petrol')}</div>
-                <div style="font-size:12px; color:#888">{row.get('colour','—')} · {odo_str} · Auto</div>
-                {f'<div style="font-size:12px; margin-top:4px">{link_html}</div>' if link_html else ''}
-            </div>
-            <div style="text-align:right">
-                <div style="font-size:24px; font-weight:600; font-family:monospace; color:{'#1D9E75' if is_best else '#f0f0f0'}">{price_str}</div>
-                <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.05em">drive away</div>
-                {f'<div style="font-size:11px; color:#888; margin-top:4px">Stock: {row["stock_no"]}</div>' if row.get("stock_no") else ''}
+min_price = prices.min() if len(prices) else None
+
+with tab_list:
+    for _, row in df.sort_values("price").iterrows():
+        is_best = row.get("price") == min_price
+        card_class = "listing-card best" if is_best else "listing-card"
+        best_badge = '<span class="badge badge-best">Lowest price</span>' if is_best else ""
+        new_badge = '<span class="badge badge-new">New</span>' if row.get("is_new") else ""
+        cond = row.get("condition", "Demo")
+        cond_badge = f'<span class="badge badge-{"used" if cond == "Used" else "demo"}">{cond}</span>'
+        link_html = f'<a href="{row["url"]}" target="_blank">View on drive.com.au ↗</a>' if row.get("url") else ""
+        price_str = f"${row['price']:,.0f}" if pd.notna(row.get("price")) else "POA"
+        odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
+
+        st.markdown(f"""
+        <div class="{card_class}">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
+                <div>
+                    <strong style="font-size:15px">{row.get('dealer','Unknown dealer')}</strong>
+                    {cond_badge} {best_badge} {new_badge}
+                    <div style="font-size:12px; color:#888; margin-top:4px">{row.get('suburb','')} · {row.get('variant','A5 Avant TFSI Petrol')}</div>
+                    <div style="font-size:12px; color:#888">{odo_str} · Auto</div>
+                    {f'<div style="font-size:12px; margin-top:4px">{link_html}</div>' if link_html else ''}
+                </div>
+                <div style="text-align:right">
+                    <div style="font-size:24px; font-weight:600; font-family:monospace; color:{'#1D9E75' if is_best else '#f0f0f0'}">{price_str}</div>
+                    <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.05em">drive away</div>
+                </div>
             </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+
+with tab_map:
+    suburbs = tuple(df["suburb"].dropna().unique().tolist())
+    with st.spinner("Geocoding suburbs…"):
+        coords = geocode_suburbs(suburbs)
+    map_df = df.copy()
+    map_df["lat"] = map_df["suburb"].map(lambda s: coords.get(s, (None, None))[0])
+    map_df["lon"] = map_df["suburb"].map(lambda s: coords.get(s, (None, None))[1])
+    map_df = map_df.dropna(subset=["lat", "lon"])
+    if map_df.empty:
+        st.info("Could not geocode any suburbs.")
+    else:
+        map_df["price_str"] = map_df["price"].apply(lambda p: f"${p:,.0f}" if pd.notna(p) else "POA")
+        fig_map = px.scatter_mapbox(
+            map_df,
+            lat="lat", lon="lon",
+            hover_name="dealer",
+            hover_data={"price_str": True, "suburb": True, "lat": False, "lon": False},
+            color="price",
+            color_continuous_scale=[[0, "#1D9E75"], [0.5, "#BB0A21"], [1, "#660010"]],
+            size=[18] * len(map_df),
+            size_max=18,
+            mapbox_style="open-street-map",
+            zoom=8,
+            center={"lat": -37.85, "lon": 145.05},
+            labels={"price_str": "Price", "suburb": "Suburb"},
+        )
+        fig_map.update_layout(
+            paper_bgcolor="#0f0f0f", font_color="#f0f0f0",
+            margin=dict(t=0, b=0, l=0, r=0), height=480,
+            coloraxis_colorbar=dict(title="Price ($)", tickprefix="$", tickformat=","),
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
 
 # --- Raw data expander ---
 with st.expander("📊 Raw data / export"):

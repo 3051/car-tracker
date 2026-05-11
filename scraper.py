@@ -5,7 +5,7 @@ No browser needed.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -119,3 +119,86 @@ def scrape_listings(debug: bool = False):
         }
 
     return listings
+
+
+_HISTORY_QUERY = """
+query GET_MARKETPLACE_LISTINGS_DYNAMIC($where: WhereOptionsDealerListing, $limit: Int!) {
+  marketplaceListings: DealerListings(
+    paginate: { page: 0, pageSize: $limit }
+    where: $where
+  ) {
+    results {
+      id
+      priceDriveAway: priceIgc
+      dealer: Dealer { name }
+      History(where: { fields: [price_igc] }) {
+        newValues
+        oldValues
+        createdAt
+      }
+    }
+  }
+}
+"""
+
+
+def get_price_history(listing_ids: list[str]) -> dict[str, list[dict]]:
+    """
+    Returns {listing_id: [{date, price, dealer}, ...]} ordered oldest → newest.
+    Pulls price-change history directly from drive.com.au API.
+    """
+    if not listing_ids:
+        return {}
+
+    payload = {
+        "operationName": "GET_MARKETPLACE_LISTINGS_DYNAMIC",
+        "query": _HISTORY_QUERY,
+        "variables": {
+            "limit": 200,
+            "where": {**_WHERE, "id": {"in": [int(i) for i in listing_ids]}},
+        },
+    }
+
+    with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
+        resp = client.post(GRAPHQL_URL, json=payload)
+        resp.raise_for_status()
+
+    data = resp.json()
+    if "errors" in data:
+        return {}
+
+    result = {}
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    for r in data["data"]["marketplaceListings"]["results"]:
+        listing_id = str(r["id"])
+        current_price = r.get("priceDriveAway")
+        dealer = (r.get("dealer") or {}).get("name", "Unknown")
+        entries = r.get("History") or []
+
+        timeline: list[dict] = []
+
+        if entries:
+            # entries come newest-first; reverse for chronological order
+            for entry in reversed(entries):
+                dt = datetime.fromisoformat(entry["createdAt"].replace("Z", "+00:00"))
+                # On the first (oldest) entry, add the original price one day before
+                if not timeline:
+                    old_price = entry["oldValues"].get("price_igc")
+                    if old_price:
+                        start = (dt - timedelta(days=1)).date().isoformat()
+                        timeline.append({"date": start, "price": old_price, "dealer": dealer})
+                new_price = entry["newValues"].get("price_igc")
+                if new_price:
+                    timeline.append({"date": dt.date().isoformat(), "price": new_price, "dealer": dealer})
+
+        if current_price:
+            if timeline and timeline[-1]["date"] == today:
+                timeline[-1]["price"] = current_price
+            else:
+                timeline.append({"date": today, "price": current_price, "dealer": dealer})
+
+        if timeline:
+            result[listing_id] = timeline
+
+    return result
