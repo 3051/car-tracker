@@ -25,11 +25,9 @@ HEADERS = {
 _QUERY = """
 query GET_MARKETPLACE_LISTINGS_DYNAMIC(
   $where: WhereOptionsDealerListing,
-  $limit: Int!,
-  $sort: SortInput
+  $limit: Int!
 ) {
   marketplaceListings: DealerListings(
-    sort: $sort
     paginate: { page: 0, pageSize: $limit }
     where: $where
   ) {
@@ -71,7 +69,6 @@ def scrape_listings(debug: bool = False):
         "variables": {
             "limit": 200,
             "where": _WHERE,
-            "sort": {"by": "priceDriveAway", "order": "ASC"},
         },
     }
 
