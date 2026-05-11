@@ -32,7 +32,7 @@ def fetch_price_history(listing_ids: tuple[str, ...]) -> dict[str, list[dict]]:
     return get_price_history(list(listing_ids))
 
 
-def make_sparkline(prices: list[float], width: int = 300, height: int = 52) -> str:
+def make_sparkline(prices: list[float], dates: list[str] | None = None, width: int = 300, height: int = 52) -> str:
     if len(prices) < 2:
         return ""
     lo, hi = min(prices), max(prices)
@@ -44,7 +44,7 @@ def make_sparkline(prices: list[float], width: int = 300, height: int = 52) -> s
         return height - 4 - (p - lo) / (hi - lo) * (height - 8)
     pts = " ".join(f"{sx(i):.1f},{sy(p):.1f}" for i, p in enumerate(prices))
     area = f"0,{height} {pts} {width},{height}"
-    return (
+    svg = (
         f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" '
         f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">'
         f'<polygon points="{area}" fill="#BB0A21" fill-opacity="0.15"/>'
@@ -52,6 +52,16 @@ def make_sparkline(prices: list[float], width: int = 300, height: int = 52) -> s
         f'stroke-linejoin="round" stroke-linecap="round"/>'
         f'</svg>'
     )
+    label_style = "display:flex;justify-content:space-between;font-size:9px;font-family:monospace;"
+    price_row = f'<div style="{label_style}color:#888;margin-bottom:2px;"><span>${prices[0]:,.0f}</span><span>${prices[-1]:,.0f}</span></div>'
+    date_row = ""
+    if dates and len(dates) >= 2:
+        from datetime import datetime
+        def fmt(d: str) -> str:
+            try: return datetime.strptime(d, "%Y-%m-%d").strftime("%b %d")
+            except Exception: return d
+        date_row = f'<div style="{label_style}color:#555;margin-top:2px;"><span>{fmt(dates[0])}</span><span>{fmt(dates[-1])}</span></div>'
+    return price_row + svg + date_row
 
 
 st.set_page_config(
@@ -218,10 +228,12 @@ with tab_list:
         odo_str = f"{int(row['odometer']):,} km" if pd.notna(row.get("odometer")) else "—"
 
         history = ph.get(str(row.get("stock_no", "")))
-        spark_prices = [pt["price"] for pt in (history or []) if pt.get("price")]
+        spark_pts = [(pt["price"], pt["date"]) for pt in (history or []) if pt.get("price")]
         spark_html = ""
-        if len(spark_prices) >= 2:
-            spark_html = '<div style="margin-top:10px;border-top:1px solid #2a2a2a;padding-top:8px;">' + make_sparkline(spark_prices) + '</div>'
+        if len(spark_pts) >= 2:
+            spark_prices = [p for p, _ in spark_pts]
+            spark_dates = [d for _, d in spark_pts]
+            spark_html = '<div style="margin-top:10px;border-top:1px solid #2a2a2a;padding-top:8px;">' + make_sparkline(spark_prices, spark_dates) + '</div>'
 
         st.markdown(f"""
         <div class="{card_class}">
@@ -272,7 +284,30 @@ with tab_map:
             margin=dict(t=0, b=0, l=0, r=0), height=480,
             coloraxis_colorbar=dict(title="Price ($)", tickprefix="$", tickformat=","),
         )
-        st.plotly_chart(fig_map, use_container_width=True)
+        sel = st.plotly_chart(fig_map, use_container_width=True, on_select="rerun", key="map_select")
+        if sel and sel.selection and sel.selection.points:
+            sel_row = map_df.iloc[sel.selection.points[0]["point_index"]]
+            price_str = f"${sel_row['price']:,.0f}" if pd.notna(sel_row.get("price")) else "POA"
+            odo_str = f"{int(sel_row['odometer']):,} km" if pd.notna(sel_row.get("odometer")) else "—"
+            cond = sel_row.get("condition", "Demo")
+            link_html = f'<a href="{sel_row["url"]}" target="_blank">View on drive.com.au ↗</a>' if sel_row.get("url") else ""
+            st.markdown(f"""
+            <div class="listing-card" style="margin-top:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+                    <div>
+                        <strong style="font-size:15px">{sel_row.get('dealer','Unknown')}</strong>
+                        <span class="badge badge-{'used' if cond == 'Used' else 'demo'}">{cond}</span>
+                        <div style="font-size:12px;color:#888;margin-top:4px">{sel_row.get('suburb','')} · {sel_row.get('variant','')}</div>
+                        <div style="font-size:12px;color:#888">{odo_str} · Auto</div>
+                        {f'<div style="font-size:12px;margin-top:6px">{link_html}</div>' if link_html else ''}
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:24px;font-weight:600;font-family:monospace;color:#f0f0f0">{price_str}</div>
+                        <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.05em">drive away</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
 # --- Raw data expander ---
 with st.expander("📊 Raw data / export"):
@@ -297,4 +332,4 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### ℹ️ About")
-    st.caption("Queries [drive.com.au](https://www.drive.com.au) GraphQL API via httpx. Deploy free on [Streamlit Cloud](https://streamlit.io/cloud) or [Railway](https://railway.app).")
+    st.caption("DZ Car Tracker — queries [drive.com.au](https://www.drive.com.au) for Audi A5 Avant TFSI petrol listings in VIC.")
