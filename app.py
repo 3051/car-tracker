@@ -253,7 +253,7 @@ with tab_map:
         fig_map.update_traces(marker_size=14)
         fig_map.update_layout(
             paper_bgcolor="#0f0f0f", font_color="#f0f0f0",
-            margin=dict(t=0, b=0, l=0, r=0), height=480,
+            margin=dict(t=0, b=0, l=0, r=0), height=650,
             coloraxis_colorbar=dict(title="Price ($)", tickprefix="$", tickformat=","),
         )
         sel = st.plotly_chart(fig_map, use_container_width=True, on_select="rerun", key="map_select")
