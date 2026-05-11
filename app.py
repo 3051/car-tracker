@@ -188,6 +188,7 @@ if len(df) >= 2:
         margin=dict(t=40, b=20),
         xaxis_tickangle=-20,
         height=320,
+        yaxis=dict(showgrid=True, gridcolor="#2a2a2a", tickprefix="$", tickformat=","),
     )
     st.plotly_chart(fig, use_container_width=True)
 
